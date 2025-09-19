@@ -1,0 +1,22 @@
+Type,Prot Res,Prot Atom,Lig Atom,Distance (Å),Details
+Cation-Pi,HIS A94,ND1,Ring,5.92,Angle: 28.5°
+Hydrogen Bond,HIS A119,ND1,O1,3.21,DAX: 132.2°
+Hydrogen Bond,THR A199,OG1,O2,3.27,DAX: 143.1°
+Hydrophobic,VAL A143,CG2,C7,3.54,Cluster
+Hydrophobic,LEU A198,"CB,CD1,CD2","C4,C7,C8,C9",3.70,Cluster
+Hydrophobic,PHE A131,"CE2,CZ",C4,3.81,Cluster
+Metal Coordination,ZN A306,ZN,O2,2.01,
+Metal Coordination,ZN A306,ZN,O1,2.68,
+Salt Bridge,HIS A119,ND1,O1,3.21,
+Salt Bridge,HIS A94,NE2,O1,3.21,
+Salt Bridge,HIS A94,NE2,O2,3.28,
+Salt Bridge,HIS A119,ND1,O2,3.43,
+Salt Bridge,HIS A96,NE2,O2,3.53,
+Van der Waals,THR A200,"H,HG1,N,OG1","C10,C9,H10,H9",2.37,Cluster
+Van der Waals,VAL A121,"CB,CG1,CG2,HG11,HG13,HG21,HG22,HG23","C12,C13,C7,H12,H13,H7,O1",2.58,Cluster
+Van der Waals,TRP A209,"CH2,CZ2,HH2,HZ2","C1,C6,C7,H6,H7A,H7B,O1,O2",2.74,Cluster
+Van der Waals,VAL A207,"CG2,HG11,HG21,HG22,HG23","C7,H7A,H7B",2.76,Cluster
+Van der Waals,PRO A202,"CD,HD2,HD3","C3,C4,C5,H3,H4,H5",2.83,Cluster
+Van der Waals,GLN A92,"HE21,HE22,NE2","C12,H12,H2",3.04,Cluster
+Van der Waals,VAL A135,"HG11,HG21","C4,H4,H4A,H4B",3.20,Cluster
+Van der Waals,LEU A141,"CD1,HD12,HD13","H13,H7,H7B",3.34,Cluster

@@ -1686,7 +1686,9 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         try:
             cmd.delete("Interactions.Legend")
             cmd.delete("legend_*")
-            cmd.delete("Interactions.ScaleBar")
+            cmd.delete("Interactions.Overlays")
+            cmd.delete("scale_bar_geom")
+            cmd.delete("scale_label")
             cmd.delete("Interactions.Title")
         except Exception:
             pass
@@ -1745,7 +1747,7 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             rgb[1],
             rgb[2],
         ]
-        cmd.load_cgo(obj, "Interactions.ScaleBar")
+        cmd.load_cgo(obj, "scale_bar_geom")
         # label
         try:
             lab = "scale_label"
@@ -1754,7 +1756,8 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             cmd.label(lab, f'"{int(round(L))} Å"')
             cmd.set("label_color", "white", lab)
             cmd.set("label_outline_color", "black", lab)
-            cmd.group("Interactions.ScaleBar", lab)
+            cmd.group("Interactions.Overlays", "scale_bar_geom")
+            cmd.group("Interactions.Overlays", lab)
         except Exception:
             pass
 
@@ -2202,6 +2205,7 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             "compute_on_load": False,
             "auto_zoom": True,
             "confirm_remove_all": True,
+            "show_legend_on_screen": False,
             # chooser defaults
             "chooser_show": "All",
             "chooser_near": False,

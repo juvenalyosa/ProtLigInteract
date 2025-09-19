@@ -107,7 +107,30 @@ ATOM_DEFS = {
 }
 
 # Common PDB residue names for nucleotides (DNA/RNA)
-NUCLEOTIDE_RESN = set(["A", "C", "G", "U", "DA", "DC", "DG", "DT", "I", "DI"])
+NUCLEOTIDE_RESN = set([
+    "A", "C", "G", "U", "T",
+    "DA", "DC", "DG", "DT", "DU",
+    "I", "DI", "PSU", "1MA", "5MC", "H2U", "OMC", "5MU", "M2G", "MIA", "7MG",
+])
+
+SUGAR_PRIME_NAMES = {"C1'", "C2'", "C3'", "C4'", "O4'", "O3'", "O5'"}
+
+def is_nucleotide_residue(res):
+    try:
+        resn = res.get_resname().upper().strip()
+    except Exception:
+        return False
+    if resn in NUCLEOTIDE_RESN:
+        return True
+    try:
+        names = {a.get_name().upper() for a in res}
+    except Exception:
+        names = set()
+    if 'P' in names:
+        return True
+    if names.intersection({n.upper() for n in SUGAR_PRIME_NAMES}):
+        return True
+    return False
 
 # Simple covalent radii (Å) for bond estimation and angle geometry
 COVALENT_RADII = {
@@ -315,13 +338,15 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 continue
             seen.add(key)
             heavy_atoms = [a for a in res if getattr(a, "element", "") != "H"]
+            names = {a.get_name().upper() for a in res}
+            is_nuc = resn.upper() in NUCLEOTIDE_RESN or 'P' in names or bool(names.intersection({n.upper() for n in SUGAR_PRIME_NAMES}))
             ligands.append(
                 {
                     "chain": chain_id,
                     "resi": int(resi),
                     "resn": resn,
                     "heavy_count": len(heavy_atoms),
-                    "class": "nucleotide" if resn.upper() in NUCLEOTIDE_RESN else "small_molecule",
+                    "class": "nucleotide" if is_nuc else "small_molecule",
                 }
             )
         # Sort nucleotides first, then by heavy atoms desc, then chain/resi
@@ -771,26 +796,38 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                     features["ligand_hydrophobic"].append(atom_info)
                 if atom.element in ["O", "N", "S"]:
                     features["ligand_metal_acceptors"].append(atom_info)
-            elif is_aa(res):
+            elif is_aa(res) or is_nucleotide_residue(res):
                 features["protein_atoms"].append(atom_info)
-                if resn in ATOM_DEFS["protein_positive"] and atom.name in ATOM_DEFS["protein_positive"][resn]:
+                if is_aa(res) and resn in ATOM_DEFS["protein_positive"] and atom.name in ATOM_DEFS["protein_positive"][resn]:
                     features["protein_positive"].append(atom_info)
-                if resn in ATOM_DEFS["protein_negative"] and atom.name in ATOM_DEFS["protein_negative"][resn]:
+                if is_aa(res) and resn in ATOM_DEFS["protein_negative"] and atom.name in ATOM_DEFS["protein_negative"][resn]:
                     features["protein_negative"].append(atom_info)
-                if (resn in ATOM_DEFS["protein_h_donors"] and atom.name in ATOM_DEFS["protein_h_donors"][resn]) or (
-                    atom.name == "N" and resn != "PRO"
+                if (
+                    (is_aa(res) and resn in ATOM_DEFS["protein_h_donors"] and atom.name in ATOM_DEFS["protein_h_donors"][resn])
+                    or (atom.name == "N" and resn != "PRO")
+                    or (is_nucleotide_residue(res) and atom.element in ("N",))
                 ):
                     features["protein_h_donors"].append(atom_info)
                 if (
-                    resn in ATOM_DEFS["protein_h_acceptors"] and atom.name in ATOM_DEFS["protein_h_acceptors"][resn]
-                ) or (atom.name == "O"):
+                    (is_aa(res) and resn in ATOM_DEFS["protein_h_acceptors"] and atom.name in ATOM_DEFS["protein_h_acceptors"][resn])
+                    or (atom.name == "O")
+                    or (is_nucleotide_residue(res) and atom.element in ("O", "N"))
+                ):
                     features["protein_h_acceptors"].append(atom_info)
-                if resn in ATOM_DEFS["protein_hydrophobic_res"] and atom.element == "C":
+                if (is_aa(res) and resn in ATOM_DEFS["protein_hydrophobic_res"] and atom.element == "C") or (
+                    is_nucleotide_residue(res) and atom.element == "C"
+                ):
                     features["protein_hydrophobic"].append(atom_info)
             elif resn in ATOM_DEFS["metals"]:
                 features["metals"].append(atom_info)
 
         features["protein_rings"] = self._find_rings(features["protein_atoms"], ATOM_DEFS["protein_aromatic_rings"])
+        # Add nucleic acid base rings detected generically among receptor atoms
+        try:
+            nuc_rings = self._detect_polymer_nucleic_rings(features["protein_atoms"]) if features["protein_atoms"] else []
+            features["protein_rings"].extend(nuc_rings)
+        except Exception:
+            pass
         features["ligand_rings"] = self._detect_ligand_rings(features)
 
         # Store ligand centroid for legend placement
@@ -800,6 +837,61 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             features["ligand_centroid"] = None
 
         return features
+
+    def _detect_polymer_nucleic_rings(self, protein_atoms):
+        # Group atoms by residue for nucleic residues and detect 5/6-member planar cycles
+        by_res = defaultdict(list)
+        for a in protein_atoms:
+            by_res[(a['chain'], a['resi'], a['resn'])].append(a)
+        rings = []
+        for (chain, resi, resn), atoms in by_res.items():
+            # Filter nucleic residues
+            class DummyRes:
+                def __init__(self, rn, atoms_list):
+                    self._rn = rn
+                    self._atoms = atoms_list
+                def get_resname(self):
+                    return self._rn
+                def __iter__(self):
+                    for x in self._atoms:
+                        yield x['atom']
+            if not is_nucleotide_residue(DummyRes(resn, atoms)):
+                continue
+            coords = [a['coord'] for a in atoms]
+            elements = [a['element'].upper() for a in atoms]
+            # Build adjacency by covalent threshold
+            adj = {i: set() for i in range(len(atoms))}
+            for i in range(len(atoms)):
+                for j in range(i+1, len(atoms)):
+                    if distance(coords[i], coords[j]) <= self._bond_threshold(elements[i], elements[j]):
+                        adj[i].add(j); adj[j].add(i)
+            cycles = set(); target_lengths={5,6}
+            def dfs(start, cur, vis):
+                if len(cur) > 6:
+                    return
+                u = cur[-1]
+                for v in adj[u]:
+                    if v == start and len(cur) in target_lengths:
+                        cycles.add(tuple(sorted(cur)))
+                    if v in vis or v < start:
+                        continue
+                    dfs(start, cur+[v], vis|{v})
+            for s in range(len(atoms)):
+                dfs(s, [s], {s})
+            for cyc in cycles:
+                ring_coords = [coords[i] for i in cyc]
+                normal = get_normal(ring_coords)
+                centroid = get_centroid(ring_coords)
+                # planarity check
+                if max(abs(np.dot(normal, p-centroid)) for p in ring_coords) > 0.2:
+                    continue
+                en = [elements[i] for i in cyc]
+                if sum(1 for e in en if e in ('C','N'))/len(en) < 0.8:
+                    continue
+                radius = get_ring_radius(ring_coords, centroid)
+                rings.append({'resn': resn, 'resi': resi, 'chain': chain, 'coords': ring_coords,
+                              'centroid': centroid, 'normal': normal, 'radius': radius})
+        return rings
 
     class _NeighborGrid:
         def __init__(self, points, coords_key="coord", cell_size=4.0):

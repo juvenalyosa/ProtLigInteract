@@ -1,10 +1,12 @@
 # ProtLigInteract/__init__.py
 
 from pymol.plugins import addmenuitemqt
+
 from .code_v2 import ProtLigInteractDialog
 
 __version__ = "1.0"
 _dialog = None
+
 
 def __init_plugin__(app=None):
     """

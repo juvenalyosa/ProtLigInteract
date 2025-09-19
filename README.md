@@ -1,9 +1,7 @@
-# ProtLigInteract — PyMOL Plugin for Protein–Ligand (and Nucleic Acid) Interactions
+# ProtLigInteract — PyMOL Plugin for Protein–Ligand (and Nucleic Acid - experimental) Interactions
 
-[![Sanity](https://github.com/OWNER/REPO/actions/workflows/sanity.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/sanity.yml)
-[![Release](https://github.com/OWNER/REPO/actions/workflows/release.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/release.yml)
+[![Watch the video](https://img.youtube.com/vi/ivQN7lLcBTU/maxresdefault.jpg)](https://www.youtube.com/watch?v=ivQN7lLcBTU)
 
-Note: replace OWNER/REPO above with your GitHub org/repo once published.
 
 ProtLigInteract is a modern PyMOL plugin that detects and visualizes protein–ligand interactions (and protein–nucleic-acid contacts), with a fast, polished UI and export-ready scenes. It provides geometry-aware detection (H-bonds, halogens, cation–pi, pi–pi), cluster contacts (hydrophobic and van der Waals), ring-plane discs, per‑type styling, an in‑scene legend, and a powerful ligand chooser.
 

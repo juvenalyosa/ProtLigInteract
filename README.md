@@ -96,6 +96,12 @@ If you clone the repo, add images under `screenshots/` and they will render here
 ![Chooser](screenshots/chooser.png)
 ![Export](screenshots/export.png)
 
+## Demo Video
+
+[![Watch the demo](https://img.youtube.com/vi/ivQN7lLcBTU/0.jpg)](https://www.youtube.com/watch?v=ivQN7lLcBTU)
+
+Click the thumbnail to watch a quick walkthrough of the plugin features and workflow on YouTube.
+
 ## Tips
 
 - Angle labels are optional (Display Settings > Show Angle Labels).

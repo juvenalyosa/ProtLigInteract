@@ -1539,7 +1539,8 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         # Legend overlay refresh (optional on-screen)
         try:
             if bool(self._settings.get("show_legend_on_screen", False)) if hasattr(self, "_settings") else False:
-                self._update_legend(for_export=False, anchor=self._legend_anchor())
+                # On-screen: label-only to avoid clutter
+                self._update_legend(for_export=False, anchor=self._legend_anchor(), spheres=False)
             else:
                 try:
                     cmd.delete("Interactions.Legend")
@@ -1667,7 +1668,8 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             if hasattr(self, "legend_export_cb"):
                 include = self.legend_export_cb.isChecked()
             if include:
-                self._update_legend(for_export=True, anchor=self._legend_anchor())
+                legend_text_only = bool(self._settings.get("legend_text_only", True)) if hasattr(self, "_settings") else True
+                self._update_legend(for_export=True, anchor=self._legend_anchor(), spheres=not legend_text_only)
             else:
                 cmd.delete("Interactions.Legend")
             # Scale bar and title
@@ -2093,6 +2095,10 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         if hasattr(self, "legend_export_cb"):
             self.legend_export_cb.setChecked(True)
             self.legend_export_cb.toggled.connect(lambda _v: self._save_settings())
+        # Legend text-only
+        if hasattr(self, "legend_text_only_cb"):
+            self.legend_text_only_cb.setChecked(True)
+            self.legend_text_only_cb.toggled.connect(lambda _v: self._save_settings())
         # Disc thickness
         if hasattr(self, "disc_thickness_spin"):
             self.disc_thickness_spin.setValue(0.10)
@@ -2206,6 +2212,7 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             "auto_zoom": True,
             "confirm_remove_all": True,
             "show_legend_on_screen": False,
+            "legend_text_only": True,
             # chooser defaults
             "chooser_show": "All",
             "chooser_near": False,
@@ -2249,6 +2256,10 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 self.legend_export_cb.blockSignals(True)
                 self.legend_export_cb.setChecked(bool(s.get("legend_export", True)))
                 self.legend_export_cb.blockSignals(False)
+            if hasattr(self, "legend_text_only_cb"):
+                self.legend_text_only_cb.blockSignals(True)
+                self.legend_text_only_cb.setChecked(bool(s.get("legend_text_only", True)))
+                self.legend_text_only_cb.blockSignals(False)
             if hasattr(self, "disc_thickness_spin"):
                 self.disc_thickness_spin.blockSignals(True)
                 self.disc_thickness_spin.setValue(float(s.get("disc_thickness", 0.10)))
@@ -2361,7 +2372,8 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                         # remove visuals
                         self._toggle_interaction_by_id(rid)
             self._apply_labels_visibility()
-            self._update_legend(for_export=False, anchor=self._legend_anchor())
+            if bool(self._settings.get("show_legend_on_screen", False)) if hasattr(self, "_settings") else False:
+                self._update_legend(for_export=False, anchor=self._legend_anchor(), spheres=False)
         except Exception:
             pass
 
@@ -2652,7 +2664,7 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to export CSV: {e}")
 
-    def _update_legend(self, for_export=False, anchor="top_right"):
+    def _update_legend(self, for_export=False, anchor="top_right", spheres=True):
         # Remove previous legend
         try:
             cmd.delete("Interactions.Legend")
@@ -2693,9 +2705,12 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             ps_name = f"legend_{idx}"
             try:
                 cmd.pseudoatom(ps_name, pos=[float(pos[0]), float(pos[1]), float(pos[2])])
-                cmd.show("spheres", ps_name)
-                cmd.set("sphere_scale", 0.3, ps_name)
-                cmd.color(self._type_color_name(name), ps_name)
+                if spheres:
+                    cmd.show("spheres", ps_name)
+                    cmd.set("sphere_scale", 0.3, ps_name)
+                    cmd.color(self._type_color_name(name), ps_name)
+                else:
+                    cmd.hide("everything", ps_name)
                 cmd.label(ps_name, f'"{name}"')
                 cmd.set("label_color", "white", ps_name)
                 cmd.set("label_outline_color", "black", ps_name)

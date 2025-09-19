@@ -104,6 +104,7 @@
           <item row="0" column="0"><widget class="QLabel" name="legendCornerLabel"><property name="text"><string>Legend Corner</string></property></widget></item>
           <item row="0" column="1"><widget class="QComboBox" name="legend_corner_combo"/></item>
           <item row="0" column="2"><widget class="QCheckBox" name="legend_export_cb"><property name="text"><string>Include Legend in Export</string></property></widget></item>
+          <item row="0" column="3"><widget class="QCheckBox" name="legend_text_only_cb"><property name="text"><string>Legend text-only</string></property></widget></item>
 
           <item row="1" column="0"><widget class="QLabel" name="discThicknessLabel"><property name="text"><string>Ring Disc Thickness (Å)</string></property></widget></item>
           <item row="1" column="1"><widget class="QDoubleSpinBox" name="disc_thickness_spin">

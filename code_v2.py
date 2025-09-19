@@ -1536,9 +1536,16 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         cmd.set("dash_radius", 0.08)
         cmd.set("ray_trace_fog", 0)  # No fog
         cmd.set("depth_cue", 0)  # No depth cueing
-        # Legend overlay refresh
+        # Legend overlay refresh (optional on-screen)
         try:
-            self._update_legend()
+            if bool(self._settings.get("show_legend_on_screen", False)) if hasattr(self, "_settings") else False:
+                self._update_legend(for_export=False, anchor=self._legend_anchor())
+            else:
+                try:
+                    cmd.delete("Interactions.Legend")
+                    cmd.delete("legend_*")
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -1675,6 +1682,14 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         except Exception:
             pass
         cmd.png(out, width=2000, height=2000, dpi=300, ray=1)
+        # Clean transient overlays
+        try:
+            cmd.delete("Interactions.Legend")
+            cmd.delete("legend_*")
+            cmd.delete("Interactions.ScaleBar")
+            cmd.delete("Interactions.Title")
+        except Exception:
+            pass
         QtWidgets.QMessageBox.information(self, "Exported", f"Image saved to {out}")
 
     def _update_scale_bar_for_export(self):
@@ -2637,6 +2652,7 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         # Remove previous legend
         try:
             cmd.delete("Interactions.Legend")
+            cmd.delete("legend_*")
         except Exception:
             pass
         # Position based on object extent for export-safe placement

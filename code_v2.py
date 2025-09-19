@@ -1389,6 +1389,10 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 cmd.delete(disc_prot_name)
                 cmd.delete(disc_lig_name)
                 cmd.delete(pi_link_name)
+                # delete cation-pi distance + pseudoatoms if present
+                cmd.delete(f"intCationPi_{rid}")
+                cmd.delete(f"piCent_{rid}")
+                cmd.delete(f"piCat_{rid}")
             except Exception:
                 pass
             self._selected_ids.remove(rid)
@@ -1526,35 +1530,80 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                     except Exception:
                         pass
                     cmd.group(inter_type_group, pi_link_name)
+            # Cation-Pi: draw a proper distance object between ring centroid and cation atom
+            if inter.get('type') == 'Cation-Pi':
+                capi_name = f"intCationPi_{rid}"
+                pi_cent_name = f"piCent_{rid}"
+                pi_cat_name = f"piCat_{rid}"
+                start = None  # centroid coord
+                end = None    # cation atom coord
+                if 'prot_ring' in inter:
+                    # ring in protein, atom on ligand
+                    start = np.array(inter['prot_ring']['centroid'])
+                    # use first ligand atom from name list
+                    first = lig_atom_names.split(',')[0].strip()
+                    lig_atom_sel = f"({self.loaded_object} and chain {lig_chain} and resi {lig_resi} and name {first})"
+                    try:
+                        lm = cmd.get_model(lig_atom_sel)
+                        if lm.atom:
+                            a = lm.atom[0].coord
+                            end = np.array([a[0], a[1], a[2]])
+                    except Exception:
+                        pass
+                elif 'ligand_ring' in inter:
+                    # ring on ligand, atom on protein
+                    start = np.array(inter['ligand_ring']['centroid'])
+                    first = prot_atom_names.split(',')[0].strip()
+                    prot_atom_sel = f"({prot_res_sel} and name {first})"
+                    try:
+                        pm = cmd.get_model(prot_atom_sel)
+                        if pm.atom:
+                            a = pm.atom[0].coord
+                            end = np.array([a[0], a[1], a[2]])
+                    except Exception:
+                        pass
+                if start is not None and end is not None:
+                    try:
+                        # Create pseudoatoms for centroid and cation atom (hidden), use distance object
+                        cmd.pseudoatom(pi_cent_name, pos=[float(start[0]), float(start[1]), float(start[2])])
+                        cmd.pseudoatom(pi_cat_name, pos=[float(end[0]), float(end[1]), float(end[2])])
+                        cmd.hide('everything', pi_cent_name)
+                        cmd.hide('everything', pi_cat_name)
+                        cmd.distance(capi_name, pi_cent_name, pi_cat_name)
+                        cmd.set('dash_color', self._type_color_name(inter['type']), capi_name)
+                        self._apply_dash_style(capi_name, inter['type'])
+                        cmd.group(inter_type_group, capi_name)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
         self._selected_ids.add(rid)
-            prot_chain = inter["prot_res"].split()[1][0]
-            prot_resi = inter["prot_res"].split()[1][1:]
-            prot_atom_names = inter["prot_atom"]
-            lig_chain, lig_resi, lig_resn = self.ligand_info
-            lig_atom_names = inter["lig_atom"]
-            prot_chain = inter["prot_res"].split()[1][0]
-            prot_resi = inter["prot_res"].split()[1][1:]
-            prot_atom_names = inter["prot_atom"]
-            lig_chain, lig_resi, lig_resn = self.ligand_info
-            lig_atom_names = inter["lig_atom"]
+        prot_chain = inter["prot_res"].split()[1][0]
+        prot_resi = inter["prot_res"].split()[1][1:]
+        prot_atom_names = inter["prot_atom"]
+        lig_chain, lig_resi, lig_resn = self.ligand_info
+        lig_atom_names = inter["lig_atom"]
+        prot_chain = inter["prot_res"].split()[1][0]
+        prot_resi = inter["prot_res"].split()[1][1:]
+        prot_atom_names = inter["prot_atom"]
+        lig_chain, lig_resi, lig_resn = self.ligand_info
+        lig_atom_names = inter["lig_atom"]
 
-            # Show the interacting protein residue
-            prot_res_sel = f"{self.loaded_object} and chain {prot_chain} and resi {prot_resi}"
-            inter_type_group = f"Interactions.{inter['type'].replace(' ', '_')}"
-            try:
-                cmd.select(res_name, prot_res_sel)
-                cmd.show("sticks", res_name)
-                cmd.show("spheres", res_name)
-                cmd.set("sphere_scale", 0.25, res_name)
-                cmd.set("stick_radius", 0.15, res_name)
-                cmd.color("white", res_name)
-                cmd.util.cba(20, res_name)  # Color by element for protein residue
-                cmd.group(inter_type_group, res_name)
-            except Exception:
-                pass
+        # Show the interacting protein residue
+        prot_res_sel = f"{self.loaded_object} and chain {prot_chain} and resi {prot_resi}"
+        inter_type_group = f"Interactions.{inter['type'].replace(' ', '_')}"
+        try:
+            cmd.select(res_name, prot_res_sel)
+            cmd.show("sticks", res_name)
+            cmd.show("spheres", res_name)
+            cmd.set("sphere_scale", 0.25, res_name)
+            cmd.set("stick_radius", 0.15, res_name)
+            cmd.color("white", res_name)
+            cmd.util.cba(20, res_name)  # Color by element for protein residue
+            cmd.group(inter_type_group, res_name)
+        except Exception:
+            pass
 
             # Visualization logic
             if inter.get("details") == "Cluster":
@@ -2632,6 +2681,13 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                     self._apply_dash_style(dash, itype)
                 except Exception:
                     pass
+                # Cation-Pi distances
+                capi = f"intCationPi_{rid}"
+                try:
+                    cmd.set("dash_color", color_name, capi)
+                    self._apply_dash_style(capi, itype)
+                except Exception:
+                    pass
                 # Clouds
                 for obj in (f"intCloudProt_{rid}", f"intCloudLig_{rid}"):
                     try:
@@ -2741,6 +2797,9 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                     "intRingDiscProt_",
                     "intRingDiscLig_",
                     "intPiLink_",
+                    "intCationPi_",
+                    "piCent_",
+                    "piCat_",
                 ):
                     try:
                         cmd.delete(f"{prefix}{rid}")
@@ -2769,6 +2828,10 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 "intCloudLig_*",
                 "intRingDiscProt_*",
                 "intRingDiscLig_*",
+                "intPiLink_*",
+                "intCationPi_*",
+                "piCent_*",
+                "piCat_*",
                 "legend_*",
                 "angle_label_*",
                 "scale_label",

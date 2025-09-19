@@ -92,6 +92,7 @@
         <item><widget class="QPushButton" name="redraw_btn"><property name="text"><string>Redraw All</string></property></widget></item>
         <item><widget class="QPushButton" name="redraw_visible_btn"><property name="text"><string>Redraw Visible Types</string></property></widget></item>
         <item><widget class="QPushButton" name="apply_styles_btn"><property name="text"><string>Apply Styles Now</string></property></widget></item>
+        <item><widget class="QPushButton" name="render_all_btn"><property name="text"><string>Render All Interactions</string></property></widget></item>
         <item><spacer name="toolsSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint"><size><width>40</width><height>20</height></size></property></spacer></item>
       </layout>
     </item>
@@ -105,6 +106,7 @@
           <item row="0" column="1"><widget class="QComboBox" name="legend_corner_combo"/></item>
           <item row="0" column="2"><widget class="QCheckBox" name="legend_export_cb"><property name="text"><string>Include Legend in Export</string></property></widget></item>
           <item row="0" column="3"><widget class="QCheckBox" name="legend_text_only_cb"><property name="text"><string>Legend text-only</string></property></widget></item>
+          <item row="0" column="4"><widget class="QCheckBox" name="pi_outline_cb"><property name="text"><string>Use ring outlines</string></property></widget></item>
 
           <item row="1" column="0"><widget class="QLabel" name="discThicknessLabel"><property name="text"><string>Ring Disc Thickness (Å)</string></property></widget></item>
           <item row="1" column="1"><widget class="QDoubleSpinBox" name="disc_thickness_spin">

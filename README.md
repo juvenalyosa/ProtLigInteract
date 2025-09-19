@@ -54,6 +54,14 @@ Alternatively, you can copy/symlink this folder into your PyMOL plugins director
 Releases
 - Tagged pushes (`v*`) automatically publish a ready-to-install `ProtLigInteract.zip` asset.
 
+Manual zip (fallback)
+- From repo root, create a top-level folder in the zip (required by PyMOL Plugin Manager):
+  - mkdir -p ProtLigInteract && cp __init__.py code_v2.py protliginteract.ui ProtLigInteract/
+  - cp README.md requirements.txt ProtLigInteract/ 2>/dev/null || true
+  - cp CONTRIBUTING.md ProtLigInteract/ 2>/dev/null || true
+  - Optional: mkdir -p ProtLigInteract/screenshots && cp screenshots/*.png ProtLigInteract/screenshots/ 2>/dev/null || true
+  - zip -r ProtLigInteract.zip ProtLigInteract
+
 ## Usage
 
 1. Open the plugin: `Plugins > Protein-Ligand Interactions`.

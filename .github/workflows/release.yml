@@ -12,22 +12,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Create plugin zip
+      - name: Create plugin zip (with top-level folder)
         run: |
           set -e
           ZIP=ProtLigInteract.zip
-          # Include primary plugin files and docs
-          zip -r "$ZIP" \
-            __init__.py \
-            code_v2.py \
-            protliginteract.ui \
-            README.md \
-            requirements.txt \
-            CONTRIBUTING.md || true
-          # Include screenshots folder (optional, skip README there)
+          STAGE=ProtLigInteract
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp __init__.py code_v2.py protliginteract.ui "$STAGE"/
+          cp -f README.md requirements.txt "$STAGE"/ || true
+          cp -f CONTRIBUTING.md "$STAGE"/ || true
+          # Optional assets
           if [ -d screenshots ]; then \
-            zip -r "$ZIP" screenshots -x "screenshots/*.md"; \
+            mkdir -p "$STAGE"/screenshots; \
+            cp -f screenshots/*.png "$STAGE"/screenshots/ 2>/dev/null || true; \
           fi
+          zip -r "$ZIP" "$STAGE"
           echo "Created $ZIP"
 
       - name: Publish GitHub Release

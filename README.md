@@ -62,6 +62,15 @@ Manual zip (fallback)
   - Optional: mkdir -p ProtLigInteract/screenshots && cp screenshots/*.png ProtLigInteract/screenshots/ 2>/dev/null || true
   - zip -r ProtLigInteract.zip ProtLigInteract
 
+Scripted build (recommended for local zips)
+- Use the included builder to create a correct zip with a top-level folder:
+
+```
+python tools/build_zip.py                 # builds dist/ProtLigInteract.zip
+python tools/build_zip.py --name MyPlug   # custom folder name inside zip
+python tools/build_zip.py --out out.zip   # custom output path
+```
+
 ## Usage
 
 1. Open the plugin: `Plugins > Protein-Ligand Interactions`.

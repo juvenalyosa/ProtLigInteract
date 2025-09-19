@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create plugin zip
+        run: |
+          set -e
+          ZIP=ProtLigInteract.zip
+          # Include primary plugin files and docs
+          zip -r "$ZIP" \
+            __init__.py \
+            code_v2.py \
+            protliginteract.ui \
+            README.md \
+            requirements.txt \
+            CONTRIBUTING.md || true
+          # Include screenshots folder (optional, skip README there)
+          if [ -d screenshots ]; then \
+            zip -r "$ZIP" screenshots -x "screenshots/*.md"; \
+          fi
+          echo "Created $ZIP"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+            files: ProtLigInteract.zip
+            generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

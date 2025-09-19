@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>ProtLigInteractDialog</class>
+ <widget class="QDialog" name="ProtLigInteractDialog">
+  <property name="windowTitle">
+   <string>Protein-Ligand Interaction Visualizer</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+    <!-- File selector -->
+    <item>
+      <layout class="QHBoxLayout" name="fileLayout">
+        <item><widget class="QLabel" name="fileLabel"><property name="text"><string>PDB File:</string></property></widget></item>
+        <item><widget class="QLineEdit" name="file_edit"/></item>
+        <item><widget class="QPushButton" name="file_btn"><property name="text"><string>Browse...</string></property></widget></item>
+      </layout>
+    </item>
+    <!-- Ligand detection -->
+    <item>
+      <layout class="QHBoxLayout" name="ligandLayout">
+        <item><widget class="QLabel" name="ligChainLabel"><property name="text"><string>Chain:</string></property></widget></item>
+        <item><widget class="QLineEdit" name="ligand_chain"/></item>
+        <item><widget class="QLabel" name="ligResiLabel"><property name="text"><string>Resi:</string></property></widget></item>
+        <item><widget class="QLineEdit" name="ligand_resi"/></item>
+        <item><widget class="QLabel" name="ligResnLabel"><property name="text"><string>Resn:</string></property></widget></item>
+        <item><widget class="QLineEdit" name="ligand_resn"/></item>
+        <item><widget class="QPushButton" name="detect_ligand_btn"><property name="text"><string>Auto-Detect</string></property></widget></item>
+        <item><widget class="QPushButton" name="choose_ligand_btn"><property name="text"><string>Choose…</string></property></widget></item>
+      </layout>
+    </item>
+    <!-- Calculate -->
+    <item><widget class="QPushButton" name="calc_btn"><property name="text"><string>Calculate Interactions</string></property></widget></item>
+
+    <!-- Controls: Filter & Legend -->
+    <item>
+      <layout class="QHBoxLayout" name="filterLayout">
+        <item><widget class="QLabel" name="filterLabel"><property name="text"><string>Filter:</string></property></widget></item>
+        <item><widget class="QComboBox" name="filter_combo"/></item>
+        <item><widget class="QLabel" name="maxDistLabel"><property name="text"><string>Max Distance (Å):</string></property></widget></item>
+        <item><widget class="QDoubleSpinBox" name="max_distance_spin">
+          <property name="decimals"><number>2</number></property>
+          <property name="minimum"><double>0.00</double></property>
+          <property name="maximum"><double>20.00</double></property>
+          <property name="singleStep"><double>0.10</double></property>
+        </widget></item>
+        <item><widget class="QSlider" name="max_distance_slider">
+          <property name="orientation"><enum>Qt::Horizontal</enum></property>
+          <property name="minimum"><number>0</number></property>
+          <property name="maximum"><number>2000</number></property>
+          <property name="singleStep"><number>1</number></property>
+        </widget></item>
+        <item><widget class="QPushButton" name="hist_btn"><property name="text"><string>Show Histogram</string></property></widget></item>
+        <item><spacer name="filterSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint"><size><width>40</width><height>20</height></size></property></spacer></item>
+        <item>
+          <widget class="QGroupBox" name="legend_group">
+            <property name="title"><string>Legend</string></property>
+            <layout class="QGridLayout" name="legend_grid"/>
+          </widget>
+        </item>
+      </layout>
+    </item>
+
+    <!-- Per-type visibility toggles -->
+    <item>
+      <widget class="QGroupBox" name="types_group">
+        <property name="title"><string>Show Types</string></property>
+        <layout class="QVBoxLayout" name="types_layout"/>
+      </widget>
+    </item>
+    <!-- Table -->
+    <item>
+      <widget class="QTableWidget" name="table">
+        <property name="columnCount"><number>6</number></property>
+        <property name="rowCount"><number>0</number></property>
+        <property name="horizontalHeaderLabels">
+          <stringlist>
+            <string>Type</string>
+            <string>Prot Res</string>
+            <string>Prot Atom</string>
+            <string>Lig Atom</string>
+            <string>Distance (Å)</string>
+            <string>Details</string>
+          </stringlist>
+        </property>
+      </widget>
+    </item>
+    <!-- Tools -->
+    <item>
+      <layout class="QHBoxLayout" name="toolsLayout">
+        <item><widget class="QPushButton" name="clear_btn"><property name="text"><string>Clear Highlights</string></property></widget></item>
+        <item><widget class="QPushButton" name="remove_all_btn"><property name="text"><string>Remove All Visuals</string></property></widget></item>
+        <item><widget class="QPushButton" name="export_csv_btn"><property name="text"><string>Export CSV</string></property></widget></item>
+        <item><widget class="QPushButton" name="redraw_btn"><property name="text"><string>Redraw All</string></property></widget></item>
+        <item><widget class="QPushButton" name="redraw_visible_btn"><property name="text"><string>Redraw Visible Types</string></property></widget></item>
+        <item><widget class="QPushButton" name="apply_styles_btn"><property name="text"><string>Apply Styles Now</string></property></widget></item>
+        <item><spacer name="toolsSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint"><size><width>40</width><height>20</height></size></property></spacer></item>
+      </layout>
+    </item>
+
+    <!-- Display settings -->
+    <item>
+      <widget class="QGroupBox" name="settings_group">
+        <property name="title"><string>Display Settings</string></property>
+        <layout class="QGridLayout" name="settings_grid">
+          <item row="0" column="0"><widget class="QLabel" name="legendCornerLabel"><property name="text"><string>Legend Corner</string></property></widget></item>
+          <item row="0" column="1"><widget class="QComboBox" name="legend_corner_combo"/></item>
+          <item row="0" column="2"><widget class="QCheckBox" name="legend_export_cb"><property name="text"><string>Include Legend in Export</string></property></widget></item>
+
+          <item row="1" column="0"><widget class="QLabel" name="discThicknessLabel"><property name="text"><string>Ring Disc Thickness (Å)</string></property></widget></item>
+          <item row="1" column="1"><widget class="QDoubleSpinBox" name="disc_thickness_spin">
+            <property name="decimals"><number>2</number></property>
+            <property name="minimum"><double>0.02</double></property>
+            <property name="maximum"><double>0.50</double></property>
+            <property name="singleStep"><double>0.01</double></property>
+          </widget></item>
+          <item row="1" column="2"><widget class="QCheckBox" name="show_labels_cb"><property name="text"><string>Show Distance Labels</string></property></widget></item>
+          <item row="1" column="3"><widget class="QCheckBox" name="auto_zoom_cb"><property name="text"><string>Auto-zoom on Compute</string></property></widget></item>
+          <item row="2" column="0"><widget class="QCheckBox" name="compute_on_load_cb"><property name="text"><string>Compute Interactions on Load</string></property></widget></item>
+          <item row="2" column="1"><widget class="QCheckBox" name="show_angle_labels_cb"><property name="text"><string>Show Angle Labels</string></property></widget></item>
+          <item row="2" column="2"><widget class="QCheckBox" name="include_scale_cb"><property name="text"><string>Include Scale Bar in Export</string></property></widget></item>
+          <item row="2" column="3"><widget class="QLabel" name="scaleLenLabel"><property name="text"><string>Scale (Å)</string></property></widget></item>
+          <item row="2" column="4"><widget class="QSpinBox" name="scale_length_spin"><property name="minimum"><number>1</number></property><property name="maximum"><number>100</number></property><property name="value"><number>10</number></property></widget></item>
+          <item row="3" column="0"><widget class="QCheckBox" name="include_title_cb"><property name="text"><string>Include Title in Export</string></property></widget></item>
+          <item row="3" column="1"><widget class="QLineEdit" name="title_line"><property name="placeholderText"><string>Title text…</string></property></widget></item>
+          <item row="3" column="2"><widget class="QPushButton" name="reset_defaults_btn"><property name="text"><string>Reset to Defaults</string></property></widget></item>
+          <item row="3" column="3"><widget class="QPushButton" name="edit_styles_btn"><property name="text"><string>Edit Styles…</string></property></widget></item>
+        </layout>
+      </widget>
+    </item>
+
+    <!-- Export -->
+    <item>
+      <layout class="QHBoxLayout" name="renderLayout">
+        <item><widget class="QLabel" name="pngLabel"><property name="text"><string>PNG Path:</string></property></widget></item>
+        <item><widget class="QLineEdit" name="png_path_edit"/></item>
+        <item><widget class="QPushButton" name="render_btn"><property name="text"><string>Export PNG</string></property></widget></item>
+      </layout>
+    </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

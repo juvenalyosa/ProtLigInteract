@@ -1,0 +1,19 @@
+[tool.black]
+line-length = 120
+target-version = ["py38", "py39", "py310"]
+include = '\\.(py)$'
+
+[tool.ruff]
+line-length = 120
+target-version = "py38"
+select = [
+  "E",  # pycodestyle errors
+  "F",  # Pyflakes
+  "I",  # isort
+]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "preserve"
+indent-style = "space"
+line-ending = "lf"

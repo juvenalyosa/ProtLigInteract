@@ -1087,7 +1087,9 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                         "Cation-Pi", p_pos, l_placeholder, d, f"Angle: {angle:.1f}°", extra={"ligand_ring": l_ring}
                     )
             # ring-ring
-            grid_p_rings = self._NeighborGrid(features["protein_rings"], cell_size=GEOMETRY_CRITERIA["pi_t_dist"])
+            grid_p_rings = self._NeighborGrid(
+                features["protein_rings"], coords_key="centroid", cell_size=GEOMETRY_CRITERIA["pi_t_dist"]
+            )
             for p_ring in grid_p_rings.query(l_ring["centroid"], GEOMETRY_CRITERIA["pi_t_dist"]):
                 p_placeholder = {
                     "resn": p_ring["resn"],

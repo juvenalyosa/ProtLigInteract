@@ -107,30 +107,7 @@ ATOM_DEFS = {
 }
 
 # Common PDB residue names for nucleotides (DNA/RNA)
-NUCLEOTIDE_RESN = set([
-    "A", "C", "G", "U", "T",
-    "DA", "DC", "DG", "DT", "DU",
-    "I", "DI", "PSU", "1MA", "5MC", "H2U", "OMC", "5MU", "M2G", "MIA", "7MG",
-])
-
-SUGAR_PRIME_NAMES = {"C1'", "C2'", "C3'", "C4'", "O4'", "O3'", "O5'"}
-
-def is_nucleotide_residue(res):
-    try:
-        resn = res.get_resname().upper().strip()
-    except Exception:
-        return False
-    if resn in NUCLEOTIDE_RESN:
-        return True
-    try:
-        names = {a.get_name().upper() for a in res}
-    except Exception:
-        names = set()
-    if 'P' in names:
-        return True
-    if names.intersection({n.upper() for n in SUGAR_PRIME_NAMES}):
-        return True
-    return False
+NUCLEOTIDE_RESN = set(["A", "C", "G", "U", "DA", "DC", "DG", "DT", "I", "DI"])
 
 # Simple covalent radii (Å) for bond estimation and angle geometry
 COVALENT_RADII = {
@@ -233,8 +210,6 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             self.apply_styles_btn.clicked.connect(self._on_apply_styles_now)
         if hasattr(self, "remove_all_btn"):
             self.remove_all_btn.clicked.connect(self._on_remove_all_visuals)
-        if hasattr(self, "render_all_btn"):
-            self.render_all_btn.clicked.connect(self._on_render_all)
 
     def _on_load_pdb(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open PDB File", "", "PDB/CIF Files (*.pdb *.ent *.cif)")
@@ -338,15 +313,13 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 continue
             seen.add(key)
             heavy_atoms = [a for a in res if getattr(a, "element", "") != "H"]
-            names = {a.get_name().upper() for a in res}
-            is_nuc = resn.upper() in NUCLEOTIDE_RESN or 'P' in names or bool(names.intersection({n.upper() for n in SUGAR_PRIME_NAMES}))
             ligands.append(
                 {
                     "chain": chain_id,
                     "resi": int(resi),
                     "resn": resn,
                     "heavy_count": len(heavy_atoms),
-                    "class": "nucleotide" if is_nuc else "small_molecule",
+                    "class": "nucleotide" if resn.upper() in NUCLEOTIDE_RESN else "small_molecule",
                 }
             )
         # Sort nucleotides first, then by heavy atoms desc, then chain/resi
@@ -796,38 +769,26 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                     features["ligand_hydrophobic"].append(atom_info)
                 if atom.element in ["O", "N", "S"]:
                     features["ligand_metal_acceptors"].append(atom_info)
-            elif is_aa(res) or is_nucleotide_residue(res):
+            elif is_aa(res):
                 features["protein_atoms"].append(atom_info)
-                if is_aa(res) and resn in ATOM_DEFS["protein_positive"] and atom.name in ATOM_DEFS["protein_positive"][resn]:
+                if resn in ATOM_DEFS["protein_positive"] and atom.name in ATOM_DEFS["protein_positive"][resn]:
                     features["protein_positive"].append(atom_info)
-                if is_aa(res) and resn in ATOM_DEFS["protein_negative"] and atom.name in ATOM_DEFS["protein_negative"][resn]:
+                if resn in ATOM_DEFS["protein_negative"] and atom.name in ATOM_DEFS["protein_negative"][resn]:
                     features["protein_negative"].append(atom_info)
-                if (
-                    (is_aa(res) and resn in ATOM_DEFS["protein_h_donors"] and atom.name in ATOM_DEFS["protein_h_donors"][resn])
-                    or (atom.name == "N" and resn != "PRO")
-                    or (is_nucleotide_residue(res) and atom.element in ("N",))
+                if (resn in ATOM_DEFS["protein_h_donors"] and atom.name in ATOM_DEFS["protein_h_donors"][resn]) or (
+                    atom.name == "N" and resn != "PRO"
                 ):
                     features["protein_h_donors"].append(atom_info)
                 if (
-                    (is_aa(res) and resn in ATOM_DEFS["protein_h_acceptors"] and atom.name in ATOM_DEFS["protein_h_acceptors"][resn])
-                    or (atom.name == "O")
-                    or (is_nucleotide_residue(res) and atom.element in ("O", "N"))
-                ):
+                    resn in ATOM_DEFS["protein_h_acceptors"] and atom.name in ATOM_DEFS["protein_h_acceptors"][resn]
+                ) or (atom.name == "O"):
                     features["protein_h_acceptors"].append(atom_info)
-                if (is_aa(res) and resn in ATOM_DEFS["protein_hydrophobic_res"] and atom.element == "C") or (
-                    is_nucleotide_residue(res) and atom.element == "C"
-                ):
+                if resn in ATOM_DEFS["protein_hydrophobic_res"] and atom.element == "C":
                     features["protein_hydrophobic"].append(atom_info)
             elif resn in ATOM_DEFS["metals"]:
                 features["metals"].append(atom_info)
 
         features["protein_rings"] = self._find_rings(features["protein_atoms"], ATOM_DEFS["protein_aromatic_rings"])
-        # Add nucleic acid base rings detected generically among receptor atoms
-        try:
-            nuc_rings = self._detect_polymer_nucleic_rings(features["protein_atoms"]) if features["protein_atoms"] else []
-            features["protein_rings"].extend(nuc_rings)
-        except Exception:
-            pass
         features["ligand_rings"] = self._detect_ligand_rings(features)
 
         # Store ligand centroid for legend placement
@@ -837,61 +798,6 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             features["ligand_centroid"] = None
 
         return features
-
-    def _detect_polymer_nucleic_rings(self, protein_atoms):
-        # Group atoms by residue for nucleic residues and detect 5/6-member planar cycles
-        by_res = defaultdict(list)
-        for a in protein_atoms:
-            by_res[(a['chain'], a['resi'], a['resn'])].append(a)
-        rings = []
-        for (chain, resi, resn), atoms in by_res.items():
-            # Filter nucleic residues
-            class DummyRes:
-                def __init__(self, rn, atoms_list):
-                    self._rn = rn
-                    self._atoms = atoms_list
-                def get_resname(self):
-                    return self._rn
-                def __iter__(self):
-                    for x in self._atoms:
-                        yield x['atom']
-            if not is_nucleotide_residue(DummyRes(resn, atoms)):
-                continue
-            coords = [a['coord'] for a in atoms]
-            elements = [a['element'].upper() for a in atoms]
-            # Build adjacency by covalent threshold
-            adj = {i: set() for i in range(len(atoms))}
-            for i in range(len(atoms)):
-                for j in range(i+1, len(atoms)):
-                    if distance(coords[i], coords[j]) <= self._bond_threshold(elements[i], elements[j]):
-                        adj[i].add(j); adj[j].add(i)
-            cycles = set(); target_lengths={5,6}
-            def dfs(start, cur, vis):
-                if len(cur) > 6:
-                    return
-                u = cur[-1]
-                for v in adj[u]:
-                    if v == start and len(cur) in target_lengths:
-                        cycles.add(tuple(sorted(cur)))
-                    if v in vis or v < start:
-                        continue
-                    dfs(start, cur+[v], vis|{v})
-            for s in range(len(atoms)):
-                dfs(s, [s], {s})
-            for cyc in cycles:
-                ring_coords = [coords[i] for i in cyc]
-                normal = get_normal(ring_coords)
-                centroid = get_centroid(ring_coords)
-                # planarity check
-                if max(abs(np.dot(normal, p-centroid)) for p in ring_coords) > 0.2:
-                    continue
-                en = [elements[i] for i in cyc]
-                if sum(1 for e in en if e in ('C','N'))/len(en) < 0.8:
-                    continue
-                radius = get_ring_radius(ring_coords, centroid)
-                rings.append({'resn': resn, 'resi': resi, 'chain': chain, 'coords': ring_coords,
-                              'centroid': centroid, 'normal': normal, 'radius': radius})
-        return rings
 
     class _NeighborGrid:
         def __init__(self, points, coords_key="coord", cell_size=4.0):
@@ -1181,9 +1087,7 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                         "Cation-Pi", p_pos, l_placeholder, d, f"Angle: {angle:.1f}°", extra={"ligand_ring": l_ring}
                     )
             # ring-ring
-            grid_p_rings = self._NeighborGrid(
-                features["protein_rings"], coords_key="centroid", cell_size=GEOMETRY_CRITERIA["pi_t_dist"]
-            )
+            grid_p_rings = self._NeighborGrid(features["protein_rings"], cell_size=GEOMETRY_CRITERIA["pi_t_dist"])
             for p_ring in grid_p_rings.query(l_ring["centroid"], GEOMETRY_CRITERIA["pi_t_dist"]):
                 p_placeholder = {
                     "resn": p_ring["resn"],
@@ -1470,7 +1374,6 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         cloud_lig_name = f"intCloudLig_{rid}"
         disc_prot_name = f"intRingDiscProt_{rid}"
         disc_lig_name = f"intRingDiscLig_{rid}"
-        pi_link_name = f"intPiLink_{rid}"
 
         if rid in self._selected_ids:
             try:
@@ -1480,222 +1383,36 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 cmd.delete(cloud_lig_name)
                 cmd.delete(disc_prot_name)
                 cmd.delete(disc_lig_name)
-                cmd.delete(pi_link_name)
-                # delete cation-pi distance + pseudoatoms if present
-                cmd.delete(f"intCationPi_{rid}")
-                cmd.delete(f"piCent_{rid}")
-                cmd.delete(f"piCat_{rid}")
             except Exception:
                 pass
             self._selected_ids.remove(rid)
             return
         else:
-            self._draw_interaction_by_id(rid)
+            prot_chain = inter["prot_res"].split()[1][0]
+            prot_resi = inter["prot_res"].split()[1][1:]
+            prot_atom_names = inter["prot_atom"]
+            lig_chain, lig_resi, lig_resn = self.ligand_info
+            lig_atom_names = inter["lig_atom"]
+            prot_chain = inter["prot_res"].split()[1][0]
+            prot_resi = inter["prot_res"].split()[1][1:]
+            prot_atom_names = inter["prot_atom"]
+            lig_chain, lig_resi, lig_resn = self.ligand_info
+            lig_atom_names = inter["lig_atom"]
 
-    def _draw_interaction_by_id(self, rid):
-        inter = self.interactions[rid]
-        res_name = f"intRes_{rid}"
-        dash_name = f"int_dash_{rid}"
-        cloud_prot_name = f"intCloudProt_{rid}"
-        cloud_lig_name = f"intCloudLig_{rid}"
-        disc_prot_name = f"intRingDiscProt_{rid}"
-        disc_lig_name = f"intRingDiscLig_{rid}"
-        pi_link_name = f"intPiLink_{rid}"
-        prot_chain = inter['prot_res'].split()[1][0]
-        prot_resi  = inter['prot_res'].split()[1][1:]
-        prot_atom_names = inter['prot_atom']
-        lig_chain, lig_resi, lig_resn = self.ligand_info
-        lig_atom_names = inter['lig_atom']
-
-        # Show the interacting protein residue
-        prot_res_sel = f"{self.loaded_object} and chain {prot_chain} and resi {prot_resi}"
-        inter_type_group = f"Interactions.{inter['type'].replace(' ', '_')}"
-        try:
-            cmd.select(res_name, prot_res_sel)
-            cmd.show('sticks', res_name)
-            cmd.show('spheres', res_name)
-            cmd.set('sphere_scale', 0.25, res_name)
-            cmd.set('stick_radius', 0.15, res_name)
-            cmd.color('white', res_name)
-            cmd.util.cba(20, res_name)
-            cmd.group(inter_type_group, res_name)
-        except Exception:
-            pass
-
-        # Visualization logic
-        if inter.get('details') == 'Cluster':
-            prot_atom_list = prot_atom_names.split(',')
-            lig_atom_list = lig_atom_names.split(',')
-            prot_cloud_sel = f"{prot_res_sel} and name " + "+".join(prot_atom_list)
-            lig_cloud_sel = f"{self.loaded_object} and chain {lig_chain} and resi {lig_resi} and name " + "+".join(lig_atom_list)
+            # Show the interacting protein residue
+            prot_res_sel = f"{self.loaded_object} and chain {prot_chain} and resi {prot_resi}"
+            inter_type_group = f"Interactions.{inter['type'].replace(' ', '_')}"
             try:
-                cmd.select(cloud_prot_name, prot_cloud_sel)
-                cmd.select(cloud_lig_name, lig_cloud_sel)
-                cmd.show('surface', cloud_prot_name)
-                cmd.show('surface', cloud_lig_name)
-                cov = self._settings.get('style_overrides', {}).get(inter['type'], {}).get('cloud_opacity') if hasattr(self, '_settings') else None
-                trans = 1.0 - float(cov) if cov is not None else 0.6
-                cmd.set('transparency', trans, cloud_prot_name)
-                cmd.set('transparency', trans, cloud_lig_name)
-                ctype = self._type_color_name(inter['type'])
-                cmd.color(ctype, cloud_prot_name)
-                cmd.color(ctype, cloud_lig_name)
-                cmd.group(inter_type_group, cloud_prot_name)
-                cmd.group(inter_type_group, cloud_lig_name)
+                cmd.select(res_name, prot_res_sel)
+                cmd.show("sticks", res_name)
+                cmd.show("spheres", res_name)
+                cmd.set("sphere_scale", 0.25, res_name)
+                cmd.set("stick_radius", 0.15, res_name)
+                cmd.color("white", res_name)
+                cmd.util.cba(20, res_name)  # Color by element for protein residue
+                cmd.group(inter_type_group, res_name)
             except Exception:
                 pass
-        elif 'Ring' not in prot_atom_names and 'Ring' not in lig_atom_names:
-            prot_atom_sel = f"({prot_res_sel} and name {prot_atom_names})"
-            lig_atom_sel  = f"({self.loaded_object} and chain {lig_chain} and resi {lig_resi} and name {lig_atom_names})"
-            try:
-                cmd.distance(dash_name, prot_atom_sel, lig_atom_sel)
-                cmd.set('dash_color', self._type_color_name(inter['type']), dash_name)
-                self._apply_dash_style(dash_name, inter['type'])
-                cmd.group(inter_type_group, dash_name)
-                if bool(self._settings.get('show_angle_labels', False)) if hasattr(self, '_settings') else False:
-                    detail = inter.get('details')
-                    if detail:
-                        try:
-                            pm = cmd.get_model(prot_atom_sel)
-                            lm = cmd.get_model(lig_atom_sel)
-                            if pm.atom and lm.atom:
-                                p = np.array(pm.atom[0].coord)
-                                q = np.array(lm.atom[0].coord)
-                                mid = (p + q) / 2.0
-                                labname = f"angle_label_{rid}"
-                                cmd.pseudoatom(labname, pos=[float(mid[0]), float(mid[1]), float(mid[2])])
-                                cmd.label(labname, f'"{detail}"')
-                                cmd.set('label_color', 'white', labname)
-                                cmd.set('label_outline_color', 'black', labname)
-                                cmd.group(inter_type_group, labname)
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-
-        # Ring visuals for pi interactions
-        try:
-            ring_color = inter['type']
-            use_outline = bool(self._settings.get('pi_ring_outline', True)) if hasattr(self, '_settings') else True
-            if 'prot_ring' in inter:
-                r = inter['prot_ring']
-                if use_outline:
-                    self._make_ring_outline(disc_prot_name, r['centroid'], r['normal'], r.get('radius', 1.8), ring_color)
-                else:
-                    self._make_ring_disc(disc_prot_name, r['centroid'], r['normal'], r.get('radius', 1.8), ring_color)
-                cmd.group(inter_type_group, disc_prot_name)
-            if 'ligand_ring' in inter:
-                r = inter['ligand_ring']
-                if use_outline:
-                    self._make_ring_outline(disc_lig_name, r['centroid'], r['normal'], r.get('radius', 1.8), ring_color)
-                else:
-                    self._make_ring_disc(disc_lig_name, r['centroid'], r['normal'], r.get('radius', 1.8), ring_color)
-                cmd.group(inter_type_group, disc_lig_name)
-            # Optional centroid link for pi-pi to aid tracing
-            if 'prot_ring' in inter and 'ligand_ring' in inter:
-                p = np.array(inter['prot_ring']['centroid'])
-                q = np.array(inter['ligand_ring']['centroid'])
-                v = q - p
-                L = np.linalg.norm(v)
-                if L > 0:
-                    v = v / L
-                    # dashed line: N segments alternating on/off
-                    num_segments = 14
-                    cname = self._type_color_name(inter['type'])
-                    rgb = cmd.get_color_tuple(cname) or (1.0, 1.0, 0.0)
-                    obj = [cgo.COLOR, float(rgb[0]), float(rgb[1]), float(rgb[2]), cgo.BEGIN, cgo.LINES]
-                    for k in range(num_segments):
-                        # even = draw, odd = gap
-                        t0 = k / num_segments
-                        t1 = (k + 0.5) / num_segments  # dash length = 50% of segment
-                        if k % 2 == 0:
-                            a = p + v * (t0 * L)
-                            b = p + v * (min(t1, 1.0) * L)
-                            obj += [
-                                cgo.VERTEX, float(a[0]), float(a[1]), float(a[2]),
-                                cgo.VERTEX, float(b[0]), float(b[1]), float(b[2]),
-                            ]
-                    obj += [cgo.END]
-                    cmd.load_cgo(obj, pi_link_name)
-                    try:
-                        cmd.set('cgo_line_width', 1.0, pi_link_name)
-                    except Exception:
-                        pass
-                    cmd.group(inter_type_group, pi_link_name)
-            # Cation-Pi: draw a proper distance object between ring centroid and cation atom
-            if inter.get('type') == 'Cation-Pi':
-                capi_name = f"intCationPi_{rid}"
-                pi_cent_name = f"piCent_{rid}"
-                pi_cat_name = f"piCat_{rid}"
-                start = None  # centroid coord
-                end = None    # cation atom coord
-                if 'prot_ring' in inter:
-                    # ring in protein, atom on ligand
-                    start = np.array(inter['prot_ring']['centroid'])
-                    # use first ligand atom from name list
-                    first = lig_atom_names.split(',')[0].strip()
-                    lig_atom_sel = f"({self.loaded_object} and chain {lig_chain} and resi {lig_resi} and name {first})"
-                    try:
-                        lm = cmd.get_model(lig_atom_sel)
-                        if lm.atom:
-                            a = lm.atom[0].coord
-                            end = np.array([a[0], a[1], a[2]])
-                    except Exception:
-                        pass
-                elif 'ligand_ring' in inter:
-                    # ring on ligand, atom on protein
-                    start = np.array(inter['ligand_ring']['centroid'])
-                    first = prot_atom_names.split(',')[0].strip()
-                    prot_atom_sel = f"({prot_res_sel} and name {first})"
-                    try:
-                        pm = cmd.get_model(prot_atom_sel)
-                        if pm.atom:
-                            a = pm.atom[0].coord
-                            end = np.array([a[0], a[1], a[2]])
-                    except Exception:
-                        pass
-                if start is not None and end is not None:
-                    try:
-                        # Create pseudoatoms for centroid and cation atom (hidden), use distance object
-                        cmd.pseudoatom(pi_cent_name, pos=[float(start[0]), float(start[1]), float(start[2])])
-                        cmd.pseudoatom(pi_cat_name, pos=[float(end[0]), float(end[1]), float(end[2])])
-                        cmd.hide('everything', pi_cent_name)
-                        cmd.hide('everything', pi_cat_name)
-                        cmd.distance(capi_name, pi_cent_name, pi_cat_name)
-                        cmd.set('dash_color', self._type_color_name(inter['type']), capi_name)
-                        self._apply_dash_style(capi_name, inter['type'])
-                        cmd.group(inter_type_group, capi_name)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-        self._selected_ids.add(rid)
-        prot_chain = inter["prot_res"].split()[1][0]
-        prot_resi = inter["prot_res"].split()[1][1:]
-        prot_atom_names = inter["prot_atom"]
-        lig_chain, lig_resi, lig_resn = self.ligand_info
-        lig_atom_names = inter["lig_atom"]
-        prot_chain = inter["prot_res"].split()[1][0]
-        prot_resi = inter["prot_res"].split()[1][1:]
-        prot_atom_names = inter["prot_atom"]
-        lig_chain, lig_resi, lig_resn = self.ligand_info
-        lig_atom_names = inter["lig_atom"]
-
-        # Show the interacting protein residue
-        prot_res_sel = f"{self.loaded_object} and chain {prot_chain} and resi {prot_resi}"
-        inter_type_group = f"Interactions.{inter['type'].replace(' ', '_')}"
-        try:
-            cmd.select(res_name, prot_res_sel)
-            cmd.show("sticks", res_name)
-            cmd.show("spheres", res_name)
-            cmd.set("sphere_scale", 0.25, res_name)
-            cmd.set("stick_radius", 0.15, res_name)
-            cmd.color("white", res_name)
-            cmd.util.cba(20, res_name)  # Color by element for protein residue
-            cmd.group(inter_type_group, res_name)
-        except Exception:
-            pass
 
             # Visualization logic
             if inter.get("details") == "Cluster":
@@ -1817,11 +1534,9 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         cmd.set("dash_radius", 0.08)
         cmd.set("ray_trace_fog", 0)  # No fog
         cmd.set("depth_cue", 0)  # No depth cueing
-        # Legend overlay refresh intentionally disabled by default; ensure any leftovers are removed
+        # Legend overlay refresh
         try:
-            if not (hasattr(self, "_settings") and bool(self._settings.get("show_legend_on_screen", False))):
-                cmd.delete("Interactions.Legend")
-                cmd.delete("legend_*")
+            self._update_legend()
         except Exception:
             pass
 
@@ -1937,18 +1652,27 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
     def _on_render_export(self):
         out = self.png_path_edit.text().strip() or "output.png"
         cmd.set("ray_trace_mode", 1)
-        # Safe export: do not create legend/overlays to avoid interference
+        # place export-safe legend
         try:
-            cmd.delete("Interactions.Legend")
-            cmd.delete("legend_*")
-            cmd.delete("Interactions.Overlays")
-            cmd.delete("scale_bar_geom")
-            cmd.delete("scale_label")
-            cmd.delete("Interactions.Title")
+            include = True
+            if hasattr(self, "legend_export_cb"):
+                include = self.legend_export_cb.isChecked()
+            if include:
+                self._update_legend(for_export=True, anchor=self._legend_anchor())
+            else:
+                cmd.delete("Interactions.Legend")
+            # Scale bar and title
+            if bool(self._settings.get("include_scale", True)) if hasattr(self, "_settings") else True:
+                self._update_scale_bar_for_export()
+            else:
+                cmd.delete("Interactions.ScaleBar")
+            if bool(self._settings.get("include_title", False)) if hasattr(self, "_settings") else False:
+                self._update_title_for_export()
+            else:
+                cmd.delete("Interactions.Title")
         except Exception:
             pass
         cmd.png(out, width=2000, height=2000, dpi=300, ray=1)
-        # No overlays created; nothing to clean
         QtWidgets.QMessageBox.information(self, "Exported", f"Image saved to {out}")
 
     def _update_scale_bar_for_export(self):
@@ -2004,7 +1728,7 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             rgb[1],
             rgb[2],
         ]
-        cmd.load_cgo(obj, "scale_bar_geom")
+        cmd.load_cgo(obj, "Interactions.ScaleBar")
         # label
         try:
             lab = "scale_label"
@@ -2013,8 +1737,7 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             cmd.label(lab, f'"{int(round(L))} Å"')
             cmd.set("label_color", "white", lab)
             cmd.set("label_outline_color", "black", lab)
-            cmd.group("Interactions.Overlays", "scale_bar_geom")
-            cmd.group("Interactions.Overlays", lab)
+            cmd.group("Interactions.ScaleBar", lab)
         except Exception:
             pass
 
@@ -2350,10 +2073,6 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         if hasattr(self, "legend_export_cb"):
             self.legend_export_cb.setChecked(True)
             self.legend_export_cb.toggled.connect(lambda _v: self._save_settings())
-        # Legend text-only
-        if hasattr(self, "legend_text_only_cb"):
-            self.legend_text_only_cb.setChecked(True)
-            self.legend_text_only_cb.toggled.connect(lambda _v: self._save_settings())
         # Disc thickness
         if hasattr(self, "disc_thickness_spin"):
             self.disc_thickness_spin.setValue(0.10)
@@ -2383,21 +2102,17 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             self.show_angle_labels_cb.setChecked(False)
             self.show_angle_labels_cb.toggled.connect(lambda _v: self._save_settings())
         # Scale bar & title
-            if hasattr(self, "include_scale_cb"):
-                self.include_scale_cb.setChecked(False)
-                self.include_scale_cb.toggled.connect(lambda _v: self._save_settings())
+        if hasattr(self, "include_scale_cb"):
+            self.include_scale_cb.setChecked(True)
+            self.include_scale_cb.toggled.connect(lambda _v: self._save_settings())
         if hasattr(self, "scale_length_spin"):
             self.scale_length_spin.setValue(10)
             self.scale_length_spin.valueChanged.connect(lambda _v: self._save_settings())
-            if hasattr(self, "include_title_cb"):
-                self.include_title_cb.setChecked(False)
-                self.include_title_cb.toggled.connect(lambda _v: self._save_settings())
+        if hasattr(self, "include_title_cb"):
+            self.include_title_cb.setChecked(False)
+            self.include_title_cb.toggled.connect(lambda _v: self._save_settings())
         if hasattr(self, "title_line"):
             self.title_line.textChanged.connect(lambda _v: self._save_settings())
-        # Pi ring outline toggle
-        if hasattr(self, 'pi_outline_cb'):
-            self.pi_outline_cb.setChecked(True)
-            self.pi_outline_cb.toggled.connect(lambda _v: self._save_settings())
 
     def _legend_anchor(self):
         txt = (
@@ -2454,39 +2169,6 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         except Exception:
             pass
 
-    def _make_ring_outline(self, name, centroid, normal, radius, color_or_type, segments: int = 32):
-        c = np.array(centroid)
-        n = np.array(normal)
-        if np.linalg.norm(n) == 0:
-            n = np.array([0.0, 0.0, 1.0])
-        n = n / (np.linalg.norm(n) or 1.0)
-        # Orthonormal basis u, v in the ring plane
-        # pick any vector not parallel to n
-        ref = np.array([1.0, 0.0, 0.0]) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-        u = np.cross(n, ref)
-        u = u / (np.linalg.norm(u) or 1.0)
-        v = np.cross(n, u)
-        # Resolve color
-        if isinstance(color_or_type, str) and color_or_type in COLOR_MAP:
-            cname = self._type_color_name(color_or_type)
-            rgb = cmd.get_color_tuple(cname)
-        else:
-            cname = color_or_type if isinstance(color_or_type, str) else None
-            rgb = cmd.get_color_tuple(cname) if cname else color_or_type
-        if not rgb:
-            rgb = (1.0, 1.0, 0.0)
-        obj = [cgo.BEGIN, cgo.LINE_STRIP, cgo.COLOR, rgb[0], rgb[1], rgb[2]]
-        for k in range(segments + 1):
-            ang = 2.0 * np.pi * (k / segments)
-            p = c + radius * (np.cos(ang) * u + np.sin(ang) * v)
-            obj += [cgo.VERTEX, float(p[0]), float(p[1]), float(p[2])]
-        obj += [cgo.END]
-        cmd.load_cgo(obj, name)
-        try:
-            cmd.set('cgo_line_width', 2.0, name)
-        except Exception:
-            pass
-
     # --- Settings persistence ---
     def _settings_path(self):
         return os.path.join(os.path.dirname(__file__), "settings.json")
@@ -2503,8 +2185,6 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             "compute_on_load": False,
             "auto_zoom": True,
             "confirm_remove_all": True,
-            "show_legend_on_screen": False,
-            "legend_text_only": True,
             # chooser defaults
             "chooser_show": "All",
             "chooser_near": False,
@@ -2548,10 +2228,6 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 self.legend_export_cb.blockSignals(True)
                 self.legend_export_cb.setChecked(bool(s.get("legend_export", True)))
                 self.legend_export_cb.blockSignals(False)
-            if hasattr(self, "legend_text_only_cb"):
-                self.legend_text_only_cb.blockSignals(True)
-                self.legend_text_only_cb.setChecked(bool(s.get("legend_text_only", True)))
-                self.legend_text_only_cb.blockSignals(False)
             if hasattr(self, "disc_thickness_spin"):
                 self.disc_thickness_spin.blockSignals(True)
                 self.disc_thickness_spin.setValue(float(s.get("disc_thickness", 0.10)))
@@ -2606,10 +2282,6 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 self.title_line.blockSignals(True)
                 self.title_line.setText(s.get("title_text", ""))
                 self.title_line.blockSignals(False)
-            if hasattr(self, 'pi_outline_cb'):
-                self.pi_outline_cb.blockSignals(True)
-                self.pi_outline_cb.setChecked(bool(s.get('pi_ring_outline', True)))
-                self.pi_outline_cb.blockSignals(False)
             # Apply side effects
             self._apply_labels_visibility()
             self._update_legend(for_export=False, anchor=self._legend_anchor())
@@ -2668,22 +2340,7 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                         # remove visuals
                         self._toggle_interaction_by_id(rid)
             self._apply_labels_visibility()
-            if bool(self._settings.get("show_legend_on_screen", False)) if hasattr(self, "_settings") else False:
-                self._update_legend(for_export=False, anchor=self._legend_anchor(), spheres=False)
-        except Exception:
-            pass
-
-    def _on_render_all(self):
-        try:
-            items = self._table_items if self._table_items else self.interactions
-            for inter in items:
-                try:
-                    rid = self.interactions.index(inter)
-                except ValueError:
-                    continue
-                if rid not in self._selected_ids:
-                    self._draw_interaction_by_id(rid)
-            self._apply_labels_visibility()
+            self._update_legend(for_export=False, anchor=self._legend_anchor())
         except Exception:
             pass
 
@@ -2771,13 +2428,6 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 try:
                     cmd.set("dash_color", color_name, dash)
                     self._apply_dash_style(dash, itype)
-                except Exception:
-                    pass
-                # Cation-Pi distances
-                capi = f"intCationPi_{rid}"
-                try:
-                    cmd.set("dash_color", color_name, capi)
-                    self._apply_dash_style(capi, itype)
                 except Exception:
                     pass
                 # Clouds
@@ -2888,10 +2538,6 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                     "intCloudLig_",
                     "intRingDiscProt_",
                     "intRingDiscLig_",
-                    "intPiLink_",
-                    "intCationPi_",
-                    "piCent_",
-                    "piCat_",
                 ):
                     try:
                         cmd.delete(f"{prefix}{rid}")
@@ -2920,10 +2566,6 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 "intCloudLig_*",
                 "intRingDiscProt_*",
                 "intRingDiscLig_*",
-                "intPiLink_*",
-                "intCationPi_*",
-                "piCent_*",
-                "piCat_*",
                 "legend_*",
                 "angle_label_*",
                 "scale_label",
@@ -2989,11 +2631,10 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to export CSV: {e}")
 
-    def _update_legend(self, for_export=False, anchor="top_right", spheres=True):
+    def _update_legend(self, for_export=False, anchor="top_right"):
         # Remove previous legend
         try:
             cmd.delete("Interactions.Legend")
-            cmd.delete("legend_*")
         except Exception:
             pass
         # Position based on object extent for export-safe placement
@@ -3030,12 +2671,9 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             ps_name = f"legend_{idx}"
             try:
                 cmd.pseudoatom(ps_name, pos=[float(pos[0]), float(pos[1]), float(pos[2])])
-                if spheres:
-                    cmd.show("spheres", ps_name)
-                    cmd.set("sphere_scale", 0.3, ps_name)
-                    cmd.color(self._type_color_name(name), ps_name)
-                else:
-                    cmd.hide("everything", ps_name)
+                cmd.show("spheres", ps_name)
+                cmd.set("sphere_scale", 0.3, ps_name)
+                cmd.color(self._type_color_name(name), ps_name)
                 cmd.label(ps_name, f'"{name}"')
                 cmd.set("label_color", "white", ps_name)
                 cmd.set("label_outline_color", "black", ps_name)

@@ -1,7 +1,9 @@
-# ProtLigInteract — PyMOL Plugin for Protein–Ligand (and Nucleic Acid - experimental) Interactions
+# ProtLigInteract — PyMOL Plugin for Protein–Ligand (and Nucleic Acid) Interactions
 
-[![Watch the video](https://img.youtube.com/vi/ivQN7lLcBTU/maxresdefault.jpg)](https://www.youtube.com/watch?v=ivQN7lLcBTU)
+[![Sanity](https://github.com/OWNER/REPO/actions/workflows/sanity.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/sanity.yml)
+[![Release](https://github.com/OWNER/REPO/actions/workflows/release.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/release.yml)
 
+Note: replace OWNER/REPO above with your GitHub org/repo once published.
 
 ProtLigInteract is a modern PyMOL plugin that detects and visualizes protein–ligand interactions (and protein–nucleic-acid contacts), with a fast, polished UI and export-ready scenes. It provides geometry-aware detection (H-bonds, halogens, cation–pi, pi–pi), cluster contacts (hydrophobic and van der Waals), ring-plane discs, per‑type styling, an in‑scene legend, and a powerful ligand chooser.
 
@@ -60,15 +62,6 @@ Manual zip (fallback)
   - Optional: mkdir -p ProtLigInteract/screenshots && cp screenshots/*.png ProtLigInteract/screenshots/ 2>/dev/null || true
   - zip -r ProtLigInteract.zip ProtLigInteract
 
-Scripted build (recommended for local zips)
-- Use the included builder to create a correct zip with a top-level folder:
-
-```
-python tools/build_zip.py                 # builds dist/ProtLigInteract.zip
-python tools/build_zip.py --name MyPlug   # custom folder name inside zip
-python tools/build_zip.py --out out.zip   # custom output path
-```
-
 ## Usage
 
 1. Open the plugin: `Plugins > Protein-Ligand Interactions`.
@@ -93,12 +86,6 @@ If you clone the repo, add images under `screenshots/` and they will render here
 ![Main](screenshots/main.png)
 ![Chooser](screenshots/chooser.png)
 ![Export](screenshots/export.png)
-
-## Demo Video
-
-[![Watch the demo](https://img.youtube.com/vi/ivQN7lLcBTU/0.jpg)](https://www.youtube.com/watch?v=ivQN7lLcBTU)
-
-Click the thumbnail to watch a quick walkthrough of the plugin features and workflow on YouTube.
 
 ## Tips
 

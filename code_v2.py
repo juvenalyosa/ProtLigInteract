@@ -1,5 +1,8 @@
 # ProtLigInteract/code_v2.py
 import os
+import sys
+import math
+import collections
 from collections import defaultdict
 
 import numpy as np
@@ -10,18 +13,27 @@ from pymol import cgo, cmd
 from pymol.Qt import QtCore, QtWidgets
 from pymol.Qt.utils import loadUi
 
+try:
+    import matplotlib.pyplot as plt
+    from rdkit import Chem
+    from rdkit.Chem import AllChem, Draw
+    HAS_RDKIT_MPL = True
+except ImportError:
+    HAS_RDKIT_MPL = False
+
 # --- Expanded color palette for new interaction types ---
 COLOR_MAP = {
-    "Hydrogen Bond": "cyan",
-    "Salt Bridge": "red",
-    "Hydrophobic": "green",
-    "Pi-Pi Stacking": "orange",
-    "T-Shaped Pi-Pi": "darkorange",
-    "Cation-Pi": "magenta",
-    "Halogen Bond": "tv_yellow",
-    "Metal Coordination": "purple",
-    "Van der Waals": "lightorange",
-    "Selected": "yellow",
+    "Hydrogen Bond": "#2CF6F3",     # Cyan-ish
+    "Salt Bridge": "#F64D4D",       # Soft Red
+    "Hydrophobic": "#55E089",       # Soft Green
+    "Pi-Pi Stacking": "#F6A83E",    # Soft Orange
+    "T-Shaped Pi-Pi": "#F68E28",    # Darker Org
+    "Cation-Pi": "#F63EF6",         # Magenta
+    "Anion-Pi": "#FF4444",          # Red
+    "Halogen Bond": "#E0E055",      # Yellow-ish
+    "Metal Coordination": "#A83EF6",# Purple
+    "Van der Waals": "#F6C870",     # Light Orange
+    "Selected": "#FFFF55",          # Bright Yellow
 }
 
 # Per-type dash styling (applied per distance object)
@@ -31,6 +43,7 @@ STYLE_MAP = {
     "Salt Bridge": {"dash_radius": 0.09, "dash_length": 0.55, "dash_gap": 0.22},
     "Metal Coordination": {"dash_radius": 0.07, "dash_length": 0.45, "dash_gap": 0.18},
     "Cation-Pi": {"dash_radius": 0.08, "dash_length": 0.45, "dash_gap": 0.20},
+    "Anion-Pi": {"dash_radius": 0.08, "dash_length": 0.45, "dash_gap": 0.20},
     "Pi-Pi Stacking": {"dash_radius": 0.08, "dash_length": 0.45, "dash_gap": 0.20},
     "T-Shaped Pi-Pi": {"dash_radius": 0.08, "dash_length": 0.45, "dash_gap": 0.20},
 }
@@ -70,7 +83,7 @@ GEOMETRY_CRITERIA = {
 
 # Definitions for charged, donor, acceptor, and aromatic atoms
 ATOM_DEFS = {
-    "protein_positive": {"LYS": ["NZ"], "ARG": ["NH1", "NH2", "NE"], "HIS": ["ND1", "NE2"]},
+    "protein_positive": {"LYS": ["NZ"], "ARG": ["NH1", "NH2"], "HIS": ["ND1", "NE2"]},
     "protein_negative": {"ASP": ["OD1", "OD2"], "GLU": ["OE1", "OE2"]},
     "protein_h_donors": {
         "main": ["N"],
@@ -182,6 +195,7 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         self._selected_ids = set()
         self._table_items = []
         self._connect_signals()
+        self._setup_trajectory_ui()
 
     def _connect_signals(self):
         self.file_btn.clicked.connect(self._on_load_pdb)
@@ -210,6 +224,19 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             self.apply_styles_btn.clicked.connect(self._on_apply_styles_now)
         if hasattr(self, "remove_all_btn"):
             self.remove_all_btn.clicked.connect(self._on_remove_all_visuals)
+
+        # Add 2D Map button programmatically if not in UI
+        if not hasattr(self, "show_2d_btn"):
+            self.show_2d_btn = QtWidgets.QPushButton("Show 2D Map")
+            self.show_2d_btn.clicked.connect(self._on_show_2d_map)
+            # Try to add to the tools layout or near render button
+            # Assuming 'tools_group' or similar exists, or add to main layout
+            # For robustness, we'll try to find a suitable layout
+            if hasattr(self, "verticalLayout"): # Common top layout name
+                self.verticalLayout.addWidget(self.show_2d_btn)
+            else:
+                self.layout().addWidget(self.show_2d_btn)
+            self.show_2d_btn.setEnabled(False) # Enable after calculation
 
     def _on_load_pdb(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open PDB File", "", "PDB/CIF Files (*.pdb *.ent *.cif)")
@@ -705,10 +732,90 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             int(self.ligand_resi.text().strip()),
             self.ligand_resn.text().strip(),
         )
+        
+        # Validate Ligand Hydrogens for Charge Calculation
+        self._target_ph = None
+        try:
+             # Find ligand atoms in Bio.PDB structure
+             # Assuming structure is loaded and matched
+             l_c, l_i, l_n = self.ligand_info
+             has_ligand_h = False
+             
+             # Locate residue
+             target_res = None
+             for model in self.structure:
+                 for chain in model:
+                     if chain.id == l_c:
+                         # Robust Residue Lookup (handling Bio.PDB tuple keys)
+                         # Key format: (hetero_flag, sequence_id, insertion_code)
+                         # We match sequence_id == int(l_i) and resname == l_n
+                         found_res = None
+                         for r in chain:
+                             if r.id[1] == int(l_i) and r.get_resname() == l_n:
+                                 found_res = r
+                                 break
+                         
+                         if found_res:
+                             target_res = found_res
+                             break
+                 if target_res: break
+             
+             if target_res:
+                  if any(a.element == "H" for a in target_res):
+                       has_ligand_h = True
+                  
+                  if not has_ligand_h:
+                       # User Requirement: Pop up window asking for pH
+                       ph, ok = QtWidgets.QInputDialog.getDouble(
+                            self, "Protonation Required", 
+                            "The ligand has no hydrogens.\n"
+                            "To correctly verify charges (Anion/Cation-Pi, Salt Bridges),\n"
+                            "please enter the system pH for protonation:",
+                            7.4, 0.0, 14.0, 1
+                       )
+                       if ok:
+                            self._target_ph = ph
+                            # Also check protein hydrogens?
+                            # If typical protein is missing H, add them (standard pH)
+                            sel_h = f"({self.loaded_object} and elem H)"
+                            n_h = cmd.count_atoms(sel_h)
+                            n_all = cmd.count_atoms(f"({self.loaded_object})")
+                            if n_all > 0 and (n_h / n_all) < 0.1:
+                                 reply = QtWidgets.QMessageBox.question(
+                                     self, "Add Hydrogens to Protein?",
+                                     "Protein also seems to lack hydrogens.\n"
+                                     "Add standard hydrogens to protein (Glu, Asp, Lys, Arg, His charges)?",
+                                     QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+                                 )
+                                 if reply == QtWidgets.QMessageBox.Yes:
+                                      cmd.h_add(self.loaded_object)
+                       else:
+                            # User cancelled
+                            return
+             
+        except Exception as e:
+             print(f"Pre-calc Check Error: {e}")
+             
         self.interactions = self._calculate_all_interactions()
         self._populate_table()
         self._beautify_scene()
-        QtWidgets.QMessageBox.information(self, "Done", f"Found {len(self.interactions)} interactions.")
+        
+        # Calculate SASA
+        sasa_info = self._calc_sasa()
+        msg_extra = ""
+        if sasa_info:
+            msg_extra = (
+                f"\n\nSASA (Ligand):\n"
+                f"  Bound: {sasa_info['bound']:.1f} Å²\n"
+                f"  Free:  {sasa_info['free']:.1f} Å²\n"
+                f"  Buried: {sasa_info['buried']:.1f} Å² ({sasa_info['buried_pct']:.1f}%)"
+            )
+        
+        # Enable 2D map button if requirements met
+        if hasattr(self, "show_2d_btn"):
+             self.show_2d_btn.setEnabled(HAS_RDKIT_MPL)
+             
+        QtWidgets.QMessageBox.information(self, "Done", f"Found {len(self.interactions)} interactions.{msg_extra}")
         # Ensure toggles reflect group visibility
         try:
             for t, cb in getattr(self, "_type_checkboxes", {}).items():
@@ -728,7 +835,147 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         except Exception:
             pass
 
-    def _precompute_atom_features(self):
+    def _setup_trajectory_ui(self):
+        # Programmatically add Trajectory Analysis UI to the layout
+        # Assumes a vertical layout exists. We can add a GroupBox at the bottom.
+        try:
+             # Find main layout. usually self.layout() or self.centralWidget().layout()
+             layout = self.layout()
+             
+             gb = QtWidgets.QGroupBox("Trajectory Analysis")
+             vbox = QtWidgets.QVBoxLayout()
+             
+             # File Loaders
+             hbox_load = QtWidgets.QHBoxLayout()
+             self.btn_load_top = QtWidgets.QPushButton("Load Topology")
+             self.btn_load_top.setToolTip("Load PDB, PSF, GRO, etc.")
+             self.btn_load_top.clicked.connect(self._on_load_topology)
+             hbox_load.addWidget(self.btn_load_top)
+             
+             self.btn_load_traj = QtWidgets.QPushButton("Load Trajectory")
+             self.btn_load_traj.setToolTip("Load DCD, XTC, TRR, etc. into current object")
+             self.btn_load_traj.clicked.connect(self._on_load_trajectory)
+             hbox_load.addWidget(self.btn_load_traj)
+             
+             vbox.addLayout(hbox_load)
+             
+             # Analysis Controls
+             hbox = QtWidgets.QHBoxLayout()
+             hbox.addWidget(QtWidgets.QLabel("Step (Frames):"))
+             self.traj_step = QtWidgets.QSpinBox()
+             self.traj_step.setRange(1, 1000)
+             self.traj_step.setValue(1)
+             hbox.addWidget(self.traj_step)
+             
+             self.btn_traj = QtWidgets.QPushButton("Run Analysis (Histogram)")
+             self.btn_traj.clicked.connect(self._run_trajectory_analysis)
+             hbox.addWidget(self.btn_traj)
+             
+             vbox.addLayout(hbox)
+             gb.setLayout(vbox)
+             
+             gb.setLayout(vbox)
+             
+             # Add to main layout. Insert before the last item (status label?) if possible, or just add.
+             # count() - 1 usually works.
+             if hasattr(self, "verticalLayout"):
+                  self.verticalLayout.addWidget(gb)
+             else:
+                  self.layout().addWidget(gb)
+             
+        except Exception as e:
+             print(f"Traj UI Setup Error: {e}")
+
+    def _on_load_topology(self):
+        fname, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Open Topology/Structure", "", "Structure Files (*.pdb *.psf *.gro *.cif);;All Files (*)"
+        )
+        if fname:
+            try:
+                # Load into PyMOL. Use basename as object name by default PyMOL behavior
+                cmd.load(fname)
+                self._populate_limit_combo() # Refresh object list
+                # Try to select the new object if possible
+                bn = os.path.basename(fname)
+                obj_name = os.path.splitext(bn)[0]
+                idx = self.structure_combo.findText(obj_name)
+                if idx >= 0:
+                     self.structure_combo.setCurrentIndex(idx)
+                QtWidgets.QMessageBox.information(self, "Success", f"Loaded {bn}")
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, "Error", f"Failed to load topology: {e}")
+
+    def _on_load_trajectory(self):
+        # Must have a structure selected
+        obj = self.structure_combo.currentText()
+        if not obj:
+             QtWidgets.QMessageBox.warning(self, "Error", "No structure selected. Load a topology first.")
+             return
+             
+        fname, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Open Trajectory", "", "Trajectory Files (*.dcd *.xtc *.trr *.xyz *.nc);;All Files (*)"
+        )
+        if fname:
+            try:
+                cmd.load_traj(fname, obj)
+                QtWidgets.QMessageBox.information(self, "Success", f"Loaded trajectory into '{obj}'")
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, "Error", f"Failed to load trajectory: {e}")
+
+    def _update_features_coords_from_pymol(self, features):
+        """Update coordinates in features dict from current PyMOL state."""
+        # This allows us to use the static parsed structure (Bio.PDB) for topology/elements
+        # but fetch dynamic coordinates from the trajectory.
+        try:
+             # Fetch all atoms for the object in current state
+             # We rely on an ordered match or ID match.
+             # cmd.get_model returns atoms.
+             # To be safe, we map by (chain, resi, name)
+             model = cmd.get_model(self.loaded_object)
+             
+             # Build lookup
+             coord_map = {}
+             for a in model.atom:
+                  key = (a.chain, int(a.resi), a.name)
+                  coord_map[key] = a.coord
+                  
+             # Update features lists (lists of dicts)
+             # keys: protein_atoms, ligand_atoms, etc.
+             # But 'protein_atoms' dicts are references. If we update them, referenced lists update too?
+             # Yes, features["protein_atoms"] contains dict objects.
+             # We need to update 'coord' key in each atom_info dict.
+             
+             # We can iterate 'protein_atoms' and 'ligand_atoms'.
+             all_atom_lists = [features["protein_atoms"], features["ligand_atoms"]]
+             
+             for atom_list in all_atom_lists:
+                  for atom_info in atom_list:
+                       # key must match PDB parsing.
+                       # Bio.PDB chain.id is str. res.id[1] is int. atom.name is str.
+                       k = (atom_info["chain"], atom_info["resi"], atom_info["name"])
+                       if k in coord_map:
+                            atom_info["coord"] = np.array(coord_map[k])
+                            
+             # Re-compute rings/centroids since coords have changed
+             features["protein_rings"] = self._find_rings(features["protein_atoms"], ATOM_DEFS["protein_aromatic_rings"])
+             features["ligand_rings"] = self._detect_ligand_rings(features)
+             if features["ligand_atoms"]:
+                  features["ligand_centroid"] = get_centroid([a["coord"] for a in features["ligand_atoms"]])
+                  
+        except Exception as e:
+             print(f"Coord Update Error: {e}")
+
+    def _precompute_atom_features(self, update_coords=False):
+        # Optimization: cache the topology features if structure hasn't changed?
+        # For now, simplistic approach.
+        # But for trajectory, we want to Reuse topology and just Update Coords.
+        
+        # If we have cached features and just want coord update:
+        if update_coords and hasattr(self, "_cached_features"):
+             features = self._cached_features
+             self._update_features_coords_from_pymol(features)
+             return features
+
         features = defaultdict(list)
         lig_chain, lig_resi, lig_resn = self.ligand_info
 
@@ -792,12 +1039,449 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         features["ligand_rings"] = self._detect_ligand_rings(features)
 
         # Store ligand centroid for legend placement
+        # Store ligand centroid for legend placement
         if features["ligand_atoms"]:
+            # --- CHARGE CALCULATION LOGIC ---
+            try:
+                # 1. Reconstruct Mol from Ligand Atoms (PDB Block)
+                # Sort by Serial number (if available) or order seen
+                # We need to preserve order for MolFromPDBBlock to work? No, just valid PDB lines.
+                pdb_lines = []
+                for i, atom_info in enumerate(features["ligand_atoms"]):
+                    # simple PDB ATOM format: "ATOM  %5d %-4s %3s %1s%4d    %8.3f%8.3f%8.3f%6.2f%6.2f           %2s  "
+                    # Just need minimal columns
+                    atom = atom_info["atom"]
+                    c = atom_info["coord"]
+                    
+                    # Sanitize Element (Bio.PDB sometimes leaks atom names like 'CB')
+                    el = atom_info['element'].strip().upper()
+                    # If invalid or looks like atom name
+                    if len(el) > 2 or el in ("CB", "CA", "CG", "CD", "CE", "CZ", "CH", "OE", "OD", "NE", "NZ"): 
+                         # Guess from name if possible or default to C?
+                         name = atom_info['name'].strip().upper()
+                         # Simple heuristic
+                         if name.startswith("CL"): el = "Cl"
+                         elif name.startswith("BR"): el = "Br"
+                         elif name.startswith("FE"): el = "Fe"
+                         elif name.startswith("MG"): el = "Mg"
+                         elif name.startswith("ZN"): el = "Zn"
+                         elif name.startswith("MN"): el = "Mn"
+                         elif len(name) > 0 and name[0] in "CNOSP":
+                             el = name[0] 
+                         else:
+                             el = "C" # Desperate fallback
+                             
+                    # Explicit mapping for common Bio.PDB errors
+                    if el == "CB": el = "C" # Shouldn't happen with above, but safety
+                    
+                    # Use a minimal generator or string format
+                    s = f"ATOM  {i+1:>5d} {atom_info['name']:<4s} {atom_info['resn']:>3s} {atom_info['chain']:1s}{atom_info['resi']:>4d}    {c[0]:8.3f}{c[1]:8.3f}{c[2]:8.3f}  1.00  0.00           {el:>2s}  "
+                    pdb_lines.append(s)
+                
+                pdb_block = "\n".join(pdb_lines)
+                mol = Chem.MolFromPDBBlock(pdb_block, removeHs=False)
+                
+                if mol:
+                     charges = self._compute_ligand_charges(mol)
+                     # Annotate atoms
+                     for atom_info in features["ligand_atoms"]:
+                          name = atom_info["name"]
+                          if name in charges:
+                               atom_info["charge_formal"] = charges[name]["formal"]
+                               atom_info["charge_partial"] = charges[name]["partial"]
+                          else:
+                               atom_info["charge_formal"] = 0
+                               atom_info["charge_partial"] = 0.0
+            except Exception as e:
+                print(f"Charge Integration Error: {e}")
+            
             features["ligand_centroid"] = get_centroid([a["coord"] for a in features["ligand_atoms"]])
         else:
             features["ligand_centroid"] = None
+            
+        # Cache for trajectory reuse
+        self._cached_features = features
 
         return features
+
+    def _calc_sasa(self):
+        try:
+            if not self.ligand_info:
+                return None
+                
+            lig_chain, lig_resi, lig_resn = self.ligand_info
+            # Ensure the object exists using the loaded object name
+            obj = self.loaded_object
+            if not obj:
+                return None
+                
+            lig_sel = f"{obj} and chain {lig_chain} and resi {lig_resi} and resn {lig_resn}"
+            
+            # Verify selection has atoms
+            if cmd.count_atoms(lig_sel) == 0:
+                print(f"SASA Error: Ligand selection '{lig_sel}' is empty.")
+                return None
+            
+            # Save current dot settings to restore later
+            old_dot_sol = cmd.get_setting_text("dot_solvent")
+            old_dot_den = cmd.get_setting_text("dot_density")
+            
+            cmd.set("dot_solvent", 1)
+            cmd.set("dot_density", 2)
+            
+            # 1. Complex SASA (Ligand bound to protein)
+            # We need to calculate the area of the ligand *in the context of the protein*
+            # get_area returns the area of the selection.
+            # However, if we just select the ligand, get_area might ignore the protein shielding 
+            # unless we tell it to consider the context.
+            # state=1, load_b=1 implies storing values in b-factor.
+            # A more robust way:
+            #   get_area selection, state=state, load_b=0
+            # Calculation of 'bound' state:
+            #   The SASA of the ligand atoms when the protein is present.
+            
+            # Make a complex selection to ensure context is considered? 
+            # Actually get_area behavior depends on 'selection'. It calculates area for those atoms.
+            # But occlusion from other atoms is only considered if they are part of the object/enabled.
+            # Assuming protein and ligand are in the same object '{obj}' and enabled.
+            
+            complex_sasa = cmd.get_area(lig_sel)
+            
+            # 2. Free Ligand SASA
+            # We must isolate the ligand to calculate its fully exposed surface.
+            # We can create a temporary object or just use 'disable protein' trick?
+            # Safer to extract ligand to a temp object.
+            temp_lig = "temp_lig_sasa_calc"
+            cmd.create(temp_lig, lig_sel)
+            free_sasa = cmd.get_area(temp_lig)
+            cmd.delete(temp_lig)
+            
+            # Restore settings
+            if old_dot_sol: cmd.set("dot_solvent", old_dot_sol)
+            if old_dot_den: cmd.set("dot_density", old_dot_den)
+            
+            if free_sasa <= 0.001:
+                return None # Avoid division by zero
+                
+            utils_buried_area = free_sasa - complex_sasa
+            buried_perc = (utils_buried_area / free_sasa) * 100.0
+            
+            return {
+                "bound": complex_sasa,
+                "free": free_sasa,
+                "buried_percent": buried_perc
+            }
+
+        except Exception as e:
+            print(f"SASA Calculation failed: {e}")
+            return None
+
+    def _on_show_2d_map(self):
+        if not HAS_RDKIT_MPL:
+            QtWidgets.QMessageBox.warning(self, "Error", "RDKit and Matplotlib are required for 2D maps.")
+            return
+        if not self.ligand_info:
+            return
+        try:
+            self._generate_2d_map()
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to generate 2D map: {e}")
+
+    def _generate_2d_map(self):
+        lig_chain, lig_resi, lig_resn = self.ligand_info
+        lig_sel = f"{self.loaded_object} and chain {lig_chain} and resi {lig_resi} and resn {lig_resn}"
+        
+        # Get PDB block for ligand
+        pdb_block = cmd.get_pdbstr(lig_sel)
+        if not pdb_block:
+            raise ValueError("Could not retrieve ligand PDB block")
+            
+        mol = Chem.MolFromPDBBlock(pdb_block)
+        if not mol:
+            raise ValueError("RDKit failed to parse ligand PDB block")
+            
+        # Compute 2D coords (preserve 3D first)
+        conf = mol.GetConformer()
+        coords3d = [np.array(conf.GetAtomPosition(i)) for i in range(mol.GetNumAtoms())]
+        
+        AllChem.Compute2DCoords(mol)
+        conf2d = mol.GetConformer()
+        
+        # Map atom names to RDKit indices and coords
+        atom_map = {} # name -> (idx, x, y)
+        coords_2d = {} # idx -> np.array([x, y])
+        for atom in mol.GetAtoms():
+            idx = atom.GetIdx()
+            pos = conf2d.GetAtomPosition(idx)
+            p = np.array([pos.x, pos.y])
+            coords_2d[idx] = p
+            
+            info = atom.GetPDBResidueInfo()
+            if info:
+                name = info.GetName().strip()
+                atom_map[name] = {"idx": idx, "pos": p}
+        
+        # Pre-calc Ring Centroids in 3D for mapping
+        ring_map = [] # (centroid_3d, atom_indices)
+        ri = mol.GetRingInfo()
+        if ri:
+             for ring_idxs in ri.AtomRings():
+                  # Compute 3D centroid
+                  pts = [coords3d[i] for i in ring_idxs]
+                  c_3d = np.mean(pts, axis=0)
+                  ring_map.append((c_3d, ring_idxs))
+        
+        # Setup plot
+        fig, ax = plt.subplots(figsize=(12, 9)) # Larger figure
+        ax.set_aspect('equal')
+        ax.set_axis_off()
+        
+        # Calculate Mol Center and Radius (for placement)
+        all_p = np.array(list(coords_2d.values()))
+        mol_center = np.mean(all_p, axis=0)
+        mol_radius = np.max(np.linalg.norm(all_p - mol_center, axis=1))
+        label_radius = mol_radius + 2.5 # Place labels this far out
+        
+        # --- Draw Ligand Bonds ---
+        for bond in mol.GetBonds():
+            b = bond.GetBeginAtomIdx()
+            e = bond.GetEndAtomIdx()
+            p1 = coords_2d[b]
+            p2 = coords_2d[e]
+            ax.plot([p1[0], p2[0]], [p1[1], p2[1]], color='gray', linewidth=2, zorder=1)
+            
+        # --- Draw Ligand Atoms ---
+        for atom in mol.GetAtoms():
+            idx = atom.GetIdx()
+            p = coords_2d[idx]
+            symbol = atom.GetSymbol()
+            c = "black"
+            if symbol == "O": c = "red"
+            elif symbol == "N": c = "blue"
+            elif symbol == "S": c = "orange"
+            elif symbol == "P": c = "purple"
+            elif symbol == "F" or symbol == "Cl": c = "green"
+            
+            if symbol != "C":
+                ax.text(p[0], p[1], symbol, color=c, fontsize=10, 
+                        ha='center', va='center', fontweight='bold', 
+                        bbox=dict(boxstyle="circle,pad=0.1", fc="white", ec="none", alpha=0.8), zorder=2)
+
+        # --- Process Interactions for Layout ---
+        interactions_to_plot = []
+        
+        for k, inter in enumerate(self.interactions):
+            try:
+                l_name = inter.get('lig_atom')
+                p_res = inter.get('prot_res')
+                itype = inter.get('type')
+                dist = inter.get('distance', 0)
+                l_coord = inter.get('lig_coord') # 3D tuple
+                
+                # Resolve start position (Ligand Atom or Ring Center in 2D)
+                start_pos = None
+                
+                # Method 1: Exact Name Match
+                if l_name and l_name in atom_map:
+                    start_pos = atom_map[l_name]["pos"]
+                
+                # Method 2: Coordinate Match (Robust)
+                if start_pos is None and l_coord:
+                     l_c_arr = np.array(l_coord)
+                     
+                     # Check atoms (threshold 0.5A)
+                     best_atom_idx = -1
+                     best_dist = 0.5
+                     for i, c3 in enumerate(coords3d):
+                          d = np.linalg.norm(c3 - l_c_arr)
+                          if d < best_dist:
+                               best_dist = d
+                               best_atom_idx = i
+                     
+                     if best_atom_idx != -1:
+                          start_pos = coords_2d[best_atom_idx]
+                     
+                     # Check Rings (if looking for ring or if single atom failed)
+                     if start_pos is None and (l_name == "Ring" or "ligand_ring" in inter.get("extra", {})):
+                          best_ring_idx = -1
+                          best_r_dist = 1.0 # Centroid might slightly deviate
+                          for i, (rc, r_idxs) in enumerate(ring_map):
+                               d = np.linalg.norm(rc - l_c_arr)
+                               if d < best_r_dist:
+                                    best_r_dist = d
+                                    best_ring_idx = i
+                          
+                          if best_ring_idx != -1:
+                               # Calculate 2D centroid of this ring
+                               r_idxs = ring_map[best_ring_idx][1]
+                               pts_2d = [coords_2d[ri] for ri in r_idxs]
+                               start_pos = np.mean(pts_2d, axis=0)
+                
+                # Method 3: Fallback to Mol Center
+                if start_pos is None and l_name == "Ring":
+                     start_pos = mol_center
+
+                if start_pos is not None:
+                    # Calculate angle from center
+                    vec = start_pos - mol_center
+                    angle = np.arctan2(vec[1], vec[0])
+                    interactions_to_plot.append({
+                        "angle": angle,
+                        "start_pos": start_pos,
+                        "itype": itype,
+                        "label": f"{itype}\n{p_res}\n{dist:.2f}Å",
+                        "color": COLOR_MAP.get(itype, 'gray')
+                    })
+            except Exception:
+                pass
+        
+        # --- Overlap Avoidance (Angular Spreading) ---
+        # Sort by angle
+        interactions_to_plot.sort(key=lambda x: x["angle"])
+        
+        if interactions_to_plot:
+            min_sep = 0.35 # radians (~20 degrees)
+            
+            # Simple iterative spreading
+            # We iterate multiple times to smooth out distribution
+            for _ in range(5):
+                for i in range(len(interactions_to_plot)):
+                    curr = interactions_to_plot[i]
+                    # Check next
+                    next_idx = (i + 1) % len(interactions_to_plot)
+                    next_item = interactions_to_plot[next_idx]
+                    
+                    # Diff
+                    diff = next_item["angle"] - curr["angle"]
+                    if next_idx == 0: # Wrap around
+                        diff = (next_item["angle"] + 2*np.pi) - curr["angle"]
+                        
+                    if diff < min_sep:
+                        # Push apart
+                        push = (min_sep - diff) / 2.0
+                        curr["angle"] -= push
+                        next_item["angle"] += push
+                        
+                        # Normalize angles to -pi, pi range isn't strictly needed for drawing but good for logic
+                        # But here strictly wrapping logic matters. 
+                        # Simplified: Just ensure spacing.
+            
+            # --- Draw Lines and Labels ---
+            for item in interactions_to_plot:
+                angle = item["angle"]
+                start_pos = item["start_pos"]
+                
+                # Calculate label position
+                # Label is placed at fixed radius from MOLECULE CENTER
+                # This ensures they form a nice circle around the ligand
+                lx = mol_center[0] + np.cos(angle) * label_radius
+                ly = mol_center[1] + np.sin(angle) * label_radius
+                label_pos = np.array([lx, ly])
+                
+                # Draw Line: Ligand Atom -> Label Pos
+                ax.plot([start_pos[0], label_pos[0]], [start_pos[1], label_pos[1]], 
+                        '--', color=item["color"], linewidth=1, alpha=0.6)
+                
+                # Draw Label
+                # Alignment depends on side (left/right)
+                ha = 'left' if lx >= mol_center[0] else 'right'
+                
+                ax.text(lx, ly, item["label"], color='black', fontsize=8,
+                        ha=ha, va='center',
+                        bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=item["color"], alpha=0.9, lw=1.5))
+
+        plt.title(f"Ligand Interaction Map ({lig_resn} {lig_resi})")
+        plt.tight_layout()
+        plt.show()
+
+    def _run_trajectory_analysis(self):
+        if not HAS_RDKIT_MPL:
+             QtWidgets.QMessageBox.warning(self, "Error", "Matplotlib is required for plotting.")
+             return
+             
+        try:
+             states = cmd.count_states(self.loaded_object)
+             if states < 2:
+                  QtWidgets.QMessageBox.warning(self, "Warning", "Only 1 state detected. Load a trajectory first.")
+                  return
+                  
+             step = self.traj_step.value()
+             
+             # Prepare
+             print(f"Starting analysis on {states} frames with step {step}...")
+             interaction_counts = defaultdict(int) 
+             # key: (type, prot_res, lig_atom), value: count
+             
+             # Ensure topology is cached
+             self._precompute_atom_features(update_coords=False)
+             
+             frames_analyzed = 0
+             
+             # Progress Bar (Dialog?)
+             pd = QtWidgets.QProgressDialog("Analyzing Trajectory...", "Cancel", 0, states, self)
+             pd.setWindowModality(QtCore.Qt.WindowModal)
+             
+             for i in range(1, states + 1, step):
+                  if pd.wasCanceled():
+                       break
+                  pd.setValue(i)
+                  
+                  cmd.frame(i)
+                  # Update method needs to be rigorous
+                  # Since we use `_calculate_all_interactions` which calls `_precompute_atom_features`
+                  # We need to tell it to USE UPDATE MODE.
+                  # But `_calculate_all_interactions` doesn't take args in my current design.
+                  # Modifications needed:
+                  # 1. Update `_calculate_all_interactions` to accept `update_coords=True`?
+                  # 2. Or just verify `_precompute_atom_features` logic handles it?
+                  # My previous edit added `update_coords=False` default.
+                  # So `_calculate_all_interactions` calls `self._precompute_atom_features()`.
+                  # I need to change that call.
+                  
+                  # Hack: Set a flag on self?
+                  self._traj_mode = True
+                  current_inters = self._calculate_all_interactions()
+                  self._traj_mode = False
+                  
+                  frames_analyzed += 1
+                  for inter in current_inters:
+                       # Key for uniqueness: Type + ProtRes + LigAtom
+                       # Remove "distance" specific keys
+                       k = (inter["type"], inter["prot_res"], inter["lig_atom"])
+                       interaction_counts[k] += 1
+                       
+             pd.setValue(states)
+             
+             if not interaction_counts:
+                  QtWidgets.QMessageBox.information(self, "Result", "No interactions found in trajectory.")
+                  return
+                  
+             # Plotting
+             # Sort by frequency
+             sorted_inters = sorted(interaction_counts.items(), key=lambda x: x[1], reverse=True)
+             top_n = min(len(sorted_inters), 20)
+             top_items = sorted_inters[:top_n]
+             
+             labels = [f"{k[1]}-{k[2]}" for k, v in top_items]
+             freqs = [(v/frames_analyzed)*100 for k, v in top_items] # Percentage
+             colors = [COLOR_MAP.get(k[0], "gray") for k, v in top_items]
+             
+             plt.figure(figsize=(10, 6))
+             bars = plt.bar(range(top_n), freqs, color=colors)
+             plt.xticks(range(top_n), labels, rotation=45, ha='right')
+             plt.ylabel("Occupancy (%)")
+             plt.title(f"Trajectory Interaction Analysis ({frames_analyzed} frames)")
+             plt.tight_layout()
+             
+             # Legend logic for colors?
+             # Or just color by type. Labels are specific residue pairs.
+             # Maybe add type label?
+             
+             plt.show()
+             
+        except Exception as e:
+             QtWidgets.QMessageBox.critical(self, "Error", f"Trajectory Analysis failed: {e}")
+             print(f"Traceback: {e}")
 
     class _NeighborGrid:
         def __init__(self, points, coords_key="coord", cell_size=4.0):
@@ -883,6 +1567,100 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 pass
         return rings
 
+    def _compute_ligand_charges(self, mol):
+        """
+        Compute partial and formal charges for the ligand.
+        If hydrogens are missing, use Dimorphite-DL (if available) to determine
+        protonation state at pH 7.4, then transfer formal charges.
+        Then compute Gasteiger charges.
+        
+        Returns: dict { atom_name: {'formal': int, 'partial': float} }
+        """
+        try:
+            # Check for Hydrogens
+            has_h = False
+            for a in mol.GetAtoms():
+                if a.GetAtomicNum() == 1:
+                    has_h = True
+                    break
+            
+            target_mol = mol
+            
+            # If no hydrogens, attempt PH-dependent protonation to get Formal Charges
+            if not has_h:
+                try:
+                    import dimorphite_dl
+                    from rdkit.Chem import Descriptors
+                    
+                    smiles = Chem.MolToSmiles(mol)
+                    # Use specified pH or default 7.4
+                    target_ph = getattr(self, "_target_ph", None)
+                    if target_ph is None:
+                         target_ph = 7.4
+                    
+                    protonated_smiles_list = dimorphite_dl.protonate(smiles, min_ph=target_ph-0.2, max_ph=target_ph+0.2)
+                    
+                    if protonated_smiles_list:
+                         # Take the first dominant state
+                         p_smi = protonated_smiles_list[0]
+                         p_mol = Chem.MolFromSmiles(p_smi)
+                         
+                         if p_mol:
+                             # Transfer Formal Charges to original Mol based on graph match
+                             # Matches heavy atoms
+                             matches = mol.GetSubstructMatches(p_mol, useChirality=True)
+                             if not matches:
+                                  matches = mol.GetSubstructMatches(p_mol, useChirality=False) # relaxed
+                             
+                             if matches:
+                                  # match is a tuple of indices in 'mol' corresponding to 'p_mol' atoms
+                                  # But p_mol atoms are ordered by SMILES.
+                                  # We need to transfer charge FROM p_mol TO mol.
+                                  match = matches[0] # Take first match
+                                  for i, mol_idx in enumerate(match):
+                                       p_atom = p_mol.GetAtomWithIdx(i)
+                                       mol_atom = mol.GetAtomWithIdx(mol_idx)
+                                       mol_atom.SetFormalCharge(p_atom.GetFormalCharge())
+                                       
+                             target_mol = mol # Update in place
+                except ImportError:
+                    pass
+                except Exception as e:
+                    print(f"Protonation Error: {e}")
+
+            # Compute Gasteiger Charges
+            # (Requires Hydrogens for accuracy? If explicit H missing, results might be off unless ImplicitValence used)
+            # RDKit Gasteiger usually needs H.
+            # If we didn't add explicit H above (we just set formal charge), we might want to AddHs for calculation?
+            # But we can't AddHs if we don't change coords?
+            # We can work on a COPY for calculation.
+            
+            calc_mol = Chem.AddHs(target_mol) 
+            AllChem.ComputeGasteigerCharges(calc_mol)
+            
+            # Map back to names
+            charges = {}
+            for atom in calc_mol.GetAtoms():
+                 # We only care about Heavy Atoms existing in original mol
+                 # AddHs keeps original indices logic? No.
+                 # But we can match by Name? RDKit doesn't persist PDB Names easily unless sanitized properly.
+                 # Actually, if we loaded from PDB Block, 'mol' has PDBInfo.
+                 # 'calc_mol' (AddHs) should preserve Info?
+                 info = atom.GetPDBResidueInfo()
+                 if info:
+                      name = info.GetName().strip()
+                      fullname = info.GetName()
+                      # Gasteiger
+                      gc = float(atom.GetDoubleProp("_GasteigerCharge")) if atom.HasProp("_GasteigerCharge") else 0.0
+                      fc = atom.GetFormalCharge()
+                      charges[name] = {"formal": fc, "partial": gc}
+            
+            return charges
+            
+        except Exception as e:
+            print(f"Charge Calc Error: {e}")
+            return {}
+            
     def _detect_ligand_rings(self, features):
         # Build adjacency for ligand atoms
         lig = features["ligand_atoms"]
@@ -955,7 +1733,9 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         if not self.structure or not self.ligand_info:
             return []
 
-        features = self._precompute_atom_features()
+        # Coordinate Update Logic for Trajectory
+        update_coords = getattr(self, "_traj_mode", False)
+        features = self._precompute_atom_features(update_coords=update_coords)
         interactions = []
 
         # Helper to append interactions de-duplicated and with consistent formatting
@@ -977,6 +1757,21 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 "distance": float(dist),
                 "details": details or "",
             }
+            
+            # Store coordinates (essential for 2D map mapping if names fail)
+            # Try direct 'coord' first, then ring 'centroid' from extra
+            l_c = lig.get("coord")
+            if l_c is None and extra and isinstance(extra, dict) and "ligand_ring" in extra:
+                 l_c = extra["ligand_ring"].get("centroid")
+            if l_c is not None:
+                 rec["lig_coord"] = tuple(l_c) # Store as tuple for safety
+                 
+            p_c = prot.get("coord") 
+            if p_c is None and extra and isinstance(extra, dict) and "prot_ring" in extra:
+                 p_c = extra["prot_ring"].get("centroid")
+            if p_c is not None:
+                 rec["prot_coord"] = tuple(p_c)
+
             if isinstance(extra, dict):
                 rec.update(extra)
             interactions.append(rec)
@@ -1005,36 +1800,125 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             return True, dDA, None  # as last resort accept distance-only
 
         # Protein donor -> Ligand acceptor
+        # --- Hydrogen Bonds (Strict D-H...A) ---
+        # User Requirement: "must get hydrogen in the middle"
+        # We iterate Donors, find attached Hydrogens, and check geometry with Acceptors.
+        
+        hb_dist_HA = 2.8  # Strict H...A distance max (Angstroms)
+        hb_angle_min = 90.0 # Min D-H...A angle (degrees) - usually >120 preferred but 90 allows for some flexibility
+        
+        # Protein Donor (Heavy) -> Ligand Acceptor
         for p_d in features["protein_h_donors"]:
-            for l_a in grid_lig_acc.query(p_d["coord"], hb_cut):
-                if l_a["element"] in ("O", "N"):
-                    ok, d, detail = is_hbond(p_d, l_a)
-                    if ok:
-                        add_interaction("Hydrogen Bond", p_d, l_a, d, detail)
-        # Ligand donor -> Protein acceptor
-        for l_d in features["ligand_h_donors_acceptors"]:
-            for p_a in grid_prot_acc.query(l_d["coord"], hb_cut):
-                if l_d["element"] in ("O", "N"):
-                    ok, d, detail = is_hbond(l_d, p_a)
-                    if ok:
-                        add_interaction("Hydrogen Bond", p_a, l_d, d, detail)
+            # Find attached hydrogens in protein
+            p_Hs = self._donor_hydrogens(p_d, features)
+            if not p_Hs: continue
+            
+            for h in p_Hs:
+                # Check interaction with Ligand Acceptors near H
+                for l_a in grid_lig_acc.query(h["coord"], hb_dist_HA):
+                    if l_a["element"] not in ("O", "N", "F", "S"): continue
+                    
+                    # Geometry Check
+                    d_HA = distance(h["coord"], l_a["coord"])
+                    if d_HA > hb_dist_HA: continue
+                    
+                    # D-H...A Angle
+                    # vector DH = H - D, vector HA = A - H. Angle is between DH and HA? No, typically D-H..A angle.
+                    # Vector H->D: p_d - h. Vector H->A: l_a - h.
+                    # Angle is typically defined at H? No, angle D-H...A is usually ~180.
+                    # Let's use `angle_between_vectors` which returns angle between 0-180.
+                    v_HD = p_d["coord"] - h["coord"]  # Vector H to D
+                    v_HA = l_a["coord"] - h["coord"]  # Vector H to A
+                    # Wait, angle_between_vectors(v1, v2). If linear D-H...A, v_HD and v_HA are opposite?
+                    # D -- H ... A
+                    # H-D vector points left. H-A vector points right. Angle 180.
+                    
+                    angle = angle_between_vectors(v_HD, v_HA)
+                    if angle < hb_angle_min: continue
+                    
+                    # Store Interaction (use Heavy atom distance for consistent visualization/labeling usually, but H is scientifically correct)
+                    # Standard Pymol distance is often Heavy-Heavy. But let's use Heavy-Heavy for the "dashed line" anchor?
+                    # Or should we anchor to H? User said "hydrogen in the middle".
+                    # Let's interact D...A but note H involvement.
+                    d_DA = distance(p_d["coord"], l_a["coord"])
+                    add_interaction("Hydrogen Bond", p_d, l_a, d_DA, f"H-Bond (H...A {d_HA:.1f}Å, {angle:.0f}°)")
 
-        # --- Salt bridges ---
+        # Ligand Donor (Heavy) -> Protein Acceptor
+        for l_d in features["ligand_h_donors_acceptors"]:
+            if l_d["element"] not in ("O", "N", "S"): continue # Donors are usually N/O/S
+            # Find attached hydrogens in ligand
+            l_Hs = self._donor_hydrogens(l_d, features)
+            if not l_Hs: continue
+            
+            for h in l_Hs:
+                # Check interaction with Protein Acceptors near H
+                for p_a in grid_prot_acc.query(h["coord"], hb_dist_HA):
+                    if p_a["element"] not in ("O", "N", "S"): continue
+
+                    d_HA = distance(h["coord"], p_a["coord"])
+                    if d_HA > hb_dist_HA: continue
+                    
+                    v_HD = l_d["coord"] - h["coord"]
+                    v_HA = p_a["coord"] - h["coord"]
+                    angle = angle_between_vectors(v_HD, v_HA)
+                    
+                    if angle < hb_angle_min: continue
+                    
+                    d_DA = distance(l_d["coord"], p_a["coord"])
+                    add_interaction("Hydrogen Bond", p_a, l_d, d_DA, f"H-Bond (H...A {d_HA:.1f}Å, {angle:.0f}°)")
+
+        # --- Salt bridges (One per residue pair) ---
+        # Collect all candidates first, then filter.
+        sb_candidates = []
         sb_cut = GEOMETRY_CRITERIA["salt_bridge_dist"]
-        grid_lig_oxyn = self._NeighborGrid(
-            [a for a in features["ligand_atoms"] if a["element"] in ("O", "N")], cell_size=sb_cut
-        )
+        # Ligand Negative atoms (Strict Charge-Based)
+        # Element + Charge check (Formal <= -1 or Partial <= -0.3)
+        lig_neg_atoms = []
+        for a in features["ligand_atoms"]:
+             if a["element"] in ("O", "S", "P", "F", "Cl", "Br", "I"):
+                  q_f = a.get("charge_formal", 0)
+                  q_p = a.get("charge_partial", 0.0)
+                  if q_f <= -1 or q_p <= -0.3:
+                       lig_neg_atoms.append(a)
+        
+        # Ligand Positive atoms (Cation-Pi)
+        # Element N + Charge check (Formal >= 1 or Partial >= 0.3)
+        lig_pos_atoms = []
+        for a in features["ligand_atoms"]:
+             if a["element"] == "N" and a["name"] != "N":
+                  q_f = a.get("charge_formal", 0)
+                  q_p = a.get("charge_partial", 0.0)
+                  if q_f >= 1 or q_p >= 0.3:
+                       lig_pos_atoms.append(a)
+        
+        # Salt Bridge Candidates (Protein Negative -> Ligand Positive, Protein Positive -> Ligand Negative)
+        
+        # Ligand Negative candidates
+        grid_lig_neg = self._NeighborGrid(lig_neg_atoms, cell_size=sb_cut)
         for p_pos in features["protein_positive"]:
-            for l_neg in grid_lig_oxyn.query(p_pos["coord"], sb_cut):
+            for l_neg in grid_lig_neg.query(p_pos["coord"], sb_cut):
                 d = distance(p_pos["coord"], l_neg["coord"])
                 if d <= sb_cut:
-                    add_interaction("Salt Bridge", p_pos, l_neg, d)
-        grid_lig_n = self._NeighborGrid([a for a in features["ligand_atoms"] if a["element"] == "N"], cell_size=sb_cut)
+                    sb_candidates.append(("Salt Bridge", p_pos, l_neg, d))
+        
+        # Ligand Positive candidates
+        grid_lig_pos = self._NeighborGrid(lig_pos_atoms, cell_size=sb_cut)
         for p_neg in features["protein_negative"]:
-            for l_pos in grid_lig_n.query(p_neg["coord"], sb_cut):
+            for l_pos in grid_lig_pos.query(p_neg["coord"], sb_cut):
                 d = distance(p_neg["coord"], l_pos["coord"])
                 if d <= sb_cut:
-                    add_interaction("Salt Bridge", p_neg, l_pos, d)
+                     sb_candidates.append(("Salt Bridge", p_neg, l_pos, d))
+
+        # Filter: Group by (Protein Chain, Resi) -> Keep min distance one
+        sb_by_res = {}
+        for item in sb_candidates:
+            itype, prot, lig, d = item
+            key = (prot["chain"], prot["resi"]) # Ligand is always the same residue in this context
+            if key not in sb_by_res or d < sb_by_res[key][3]:
+                sb_by_res[key] = item
+        
+        for item in sb_by_res.values():
+            add_interaction(*item)
 
         # --- Metal coordination ---
         mc_cut = GEOMETRY_CRITERIA["metal_coordination_dist"]
@@ -1045,11 +1929,10 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 if d <= mc_cut:
                     add_interaction("Metal Coordination", metal, l_acc, d)
 
-        # --- Halogen bonds with C–X...A angle ---
+        # --- Halogen bonds ---
         hb_hal_cut = GEOMETRY_CRITERIA["halogen_dist"]
         grid_prot_acc2 = self._NeighborGrid(features["protein_h_acceptors"], cell_size=hb_hal_cut)
         for l_hal in features["ligand_halogens"]:
-            # find bound carbon to halogen
             neighbors = self._neighbors(l_hal, features["ligand_atoms"], element_filter={"C"})
             carbon = neighbors[0] if neighbors else None
             for p_acc in grid_prot_acc2.query(l_hal["coord"], hb_hal_cut):
@@ -1057,19 +1940,18 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 if d <= GEOMETRY_CRITERIA["halogen_dist"]:
                     detail = None
                     if carbon is not None:
-                        ang = angle_between_vectors(carbon["coord"] - l_hal["coord"], p_acc["coord"] - l_hal["coord"])
-                        if ang < GEOMETRY_CRITERIA["halogen_angle"]:
-                            continue
-                        detail = f"CXA: {ang:.1f}°"
+                         ang = angle_between_vectors(carbon["coord"] - l_hal["coord"], p_acc["coord"] - l_hal["coord"])
+                         if ang < GEOMETRY_CRITERIA["halogen_angle"]: continue
+                         detail = f"CXA: {ang:.1f}°"
                     add_interaction("Halogen Bond", p_acc, l_hal, d, detail)
 
         # --- Pi-System interactions ---
         # Cation-pi: cationic protein atom to ligand ring (if any) and vice versa
         cp_cut = GEOMETRY_CRITERIA["cation_pi_dist"]
-        grid_lig_posN = self._NeighborGrid(
-            [a for a in features["ligand_atoms"] if a["element"] == "N"], cell_size=cp_cut
-        )
+        grid_lig_posN = self._NeighborGrid(lig_pos_atoms, cell_size=cp_cut)
+        
         for p_ring in features["protein_rings"]:
+            # Placeholder needs explicit "Ring" name for logic later
             p_placeholder = {"resn": p_ring["resn"], "resi": p_ring["resi"], "chain": p_ring["chain"], "name": "Ring"}
             for l_pos in grid_lig_posN.query(p_ring["centroid"], cp_cut):
                 d = distance(l_pos["coord"], p_ring["centroid"])
@@ -1086,8 +1968,31 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                     add_interaction(
                         "Cation-Pi", p_pos, l_placeholder, d, f"Angle: {angle:.1f}°", extra={"ligand_ring": l_ring}
                     )
+        
+        # Anion-Pi: anionic protein atom to ligand ring and vice versa
+        # Reuse 'lig_neg_atoms' defined for Salt Bridges if available, else redefine
+        # (It is available from above scope)
+        grid_lig_neg = self._NeighborGrid(lig_neg_atoms, cell_size=cp_cut)
+        for p_ring in features["protein_rings"]:
+            p_placeholder = {"resn": p_ring["resn"], "resi": p_ring["resi"], "chain": p_ring["chain"], "name": "Ring"}
+            for l_neg in grid_lig_neg.query(p_ring["centroid"], cp_cut):
+                 d = distance(l_neg["coord"], p_ring["centroid"])
+                 if d <= cp_cut:
+                      add_interaction("Anion-Pi", p_placeholder, l_neg, d, extra={"prot_ring": p_ring})
+                      
+        for l_ring in features["ligand_rings"]:
+            l_placeholder = {"resn": l_ring["resn"], "resi": l_ring["resi"], "chain": l_ring["chain"], "name": "Ring"}
+            grid_p_neg = self._NeighborGrid(features["protein_negative"], cell_size=cp_cut)
+            for p_neg in grid_p_neg.query(l_ring["centroid"], cp_cut):
+                 d = distance(p_neg["coord"], l_ring["centroid"])
+                 # Angle check optional for Anion-Pi, but usually geometry is similar (normal vs charge vector)
+                 angle = angle_between_vectors(l_ring["normal"], p_neg["coord"] - l_ring["centroid"])
+                 if d <= GEOMETRY_CRITERIA["cation_pi_dist"]: # Reuse dist criteria
+                      # Check angle? 
+                      if angle <= GEOMETRY_CRITERIA["cation_pi_angle"]:
+                           add_interaction("Anion-Pi", p_neg, l_placeholder, d, f"Angle: {angle:.1f}°", extra={"ligand_ring": l_ring})
             # ring-ring
-            grid_p_rings = self._NeighborGrid(features["protein_rings"], cell_size=GEOMETRY_CRITERIA["pi_t_dist"])
+            grid_p_rings = self._NeighborGrid(features["protein_rings"], cell_size=GEOMETRY_CRITERIA["pi_t_dist"], coords_key="centroid")
             for p_ring in grid_p_rings.query(l_ring["centroid"], GEOMETRY_CRITERIA["pi_t_dist"]):
                 p_placeholder = {
                     "resn": p_ring["resn"],
@@ -1101,11 +2006,7 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                     angle <= GEOMETRY_CRITERIA["pi_pi_angle"] or angle >= 180 - GEOMETRY_CRITERIA["pi_pi_angle"]
                 ):
                     add_interaction(
-                        "Pi-Pi Stacking",
-                        p_placeholder,
-                        l_placeholder,
-                        d,
-                        f"Angle: {angle:.1f}°",
+                        "Pi-Pi Stacking", p_placeholder, l_placeholder, d, f"Angle: {angle:.1f}°",
                         extra={"prot_ring": p_ring, "ligand_ring": l_ring},
                     )
                 elif (
@@ -1113,11 +2014,7 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                     and GEOMETRY_CRITERIA["pi_t_angle_low"] <= angle <= GEOMETRY_CRITERIA["pi_t_angle_high"]
                 ):
                     add_interaction(
-                        "T-Shaped Pi-Pi",
-                        p_placeholder,
-                        l_placeholder,
-                        d,
-                        f"Angle: {angle:.1f}°",
+                        "T-Shaped Pi-Pi", p_placeholder, l_placeholder, d, f"Angle: {angle:.1f}°",
                         extra={"prot_ring": p_ring, "ligand_ring": l_ring},
                     )
 
@@ -1130,6 +2027,7 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
 
         for l_atom in features["ligand_atoms"]:
             neighbors = p_grid.query(l_atom["coord"], max_r)
+
             for p_atom in neighbors:
                 d = distance(p_atom["coord"], l_atom["coord"])
                 if d > max_r:
@@ -1383,6 +2281,10 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 cmd.delete(cloud_lig_name)
                 cmd.delete(disc_prot_name)
                 cmd.delete(disc_lig_name)
+                # Cleanup labels
+                cmd.delete(f"lbl_prot_{rid}")
+                cmd.delete(f"lbl_lig_{rid}")
+                cmd.delete(f"lbl_dist_{rid}")
             except Exception:
                 pass
             self._selected_ids.remove(rid)
@@ -1408,8 +2310,10 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 cmd.show("spheres", res_name)
                 cmd.set("sphere_scale", 0.25, res_name)
                 cmd.set("stick_radius", 0.15, res_name)
-                cmd.color("white", res_name)
-                cmd.util.cba(20, res_name)  # Color by element for protein residue
+                # Coloring: Light Orange Carbon for contrast against white cartoon
+                # util.cbao colors carbons Light Orange, others by element
+                cmd.util.cbao(res_name) 
+                
                 cmd.group(inter_type_group, res_name)
             except Exception:
                 pass
@@ -1445,38 +2349,114 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                     cmd.group(inter_type_group, cloud_lig_name)
                 except Exception:
                     pass
-            elif "Ring" not in prot_atom_names and "Ring" not in lig_atom_names:
-                # --- Dash Visualization for Specific Interactions ---
-                prot_atom_sel = f"({prot_res_sel} and name {prot_atom_names})"
-                lig_atom_sel = (
-                    f"({self.loaded_object} and chain {lig_chain} and resi {lig_resi} and name {lig_atom_names})"
-                )
-                try:
-                    cmd.distance(dash_name, prot_atom_sel, lig_atom_sel)
-                    cmd.set("dash_color", self._type_color_name(inter["type"]), dash_name)
-                    self._apply_dash_style(dash_name, inter["type"])
-                    cmd.group(inter_type_group, dash_name)
-                    # Optional angle label
-                    if bool(self._settings.get("show_angle_labels", False)) if hasattr(self, "_settings") else False:
-                        detail = inter.get("details")
-                        if detail:
-                            try:
-                                pm = cmd.get_model(prot_atom_sel)
-                                lm = cmd.get_model(lig_atom_sel)
-                                if pm.atom and lm.atom:
-                                    p = np.array(pm.atom[0].coord)
-                                    q = np.array(lm.atom[0].coord)
-                                    mid = (p + q) / 2.0
-                                    labname = f"angle_label_{rid}"
-                                    cmd.pseudoatom(labname, pos=[float(mid[0]), float(mid[1]), float(mid[2])])
-                                    cmd.label(labname, f'"{detail}"')
-                                    cmd.set("label_color", "white", labname)
-                                    cmd.set("label_outline_color", "black", labname)
-                                    cmd.group(inter_type_group, labname)
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
+            else:
+                # Visualization logic
+                # Use pseudoatoms for Ring centers to allow 'cmd.distance' to work properly
+                
+                p1_sel = None
+                p2_sel = None
+            
+                # PROTEIN SIDE
+                if inter["prot_atom"] == "Ring" or "prot_coord" in inter:
+                     # It's a ring or special coordinate. Create pseudoatom.
+                     p1_coord = inter.get("prot_coord")
+                     if p1_coord:
+                          p1_name = f"pseudo_p_{rid}"
+                          cmd.pseudoatom(p1_name, pos=list(p1_coord))
+                          p1_sel = p1_name
+                     else:
+                          pass
+                else:
+                     p1_sel = f"({prot_res_sel} and name {prot_atom_names})"
+
+                # LIGAND SIDE
+                if inter["lig_atom"] == "Ring" or "lig_coord" in inter:
+                     p2_coord = inter.get("lig_coord")
+                     if p2_coord:
+                          p2_name = f"pseudo_l_{rid}"
+                          cmd.pseudoatom(p2_name, pos=list(p2_coord))
+                          p2_sel = p2_name
+                else:
+                     p2_sel = f"({self.loaded_object} and chain {lig_chain} and resi {lig_resi} and name {lig_atom_names})"
+
+                if p1_sel and p2_sel:
+                     try:
+                          # Create distance object (Primary Visualization)
+                          cmd.distance(dash_name, p1_sel, p2_sel)
+                          
+                          # Check if valid distance created
+                          # Apply Styles
+                          c_name = f"c_{inter['type'].replace(' ', '_')}"
+                          c_rgb = _hex_to_rgb(COLOR_MAP.get(inter["type"], "#FFFFFF"))
+                          if c_rgb:
+                              cmd.set_color(c_name, list(c_rgb))
+                              cmd.set("dash_color", c_name, dash_name)
+                          
+                          # Style from map
+                          style = STYLE_MAP.get(inter["type"], {})
+                          radius = style.get("dash_radius", 0.05)
+                          cmd.set("dash_radius", radius, dash_name)
+                          cmd.set("dash_gap", style.get("dash_gap", 0.2), dash_name)
+                          cmd.set("dash_length", style.get("dash_length", 0.3), dash_name)
+                          cmd.set("dash_round_ends", 1, dash_name)
+                          
+                          # Ensure label is visible? cmd.distance shows label by default.
+                          cmd.set("label_color", c_name, dash_name)
+                          cmd.set("label_size", 20, dash_name) 
+                          
+                     except Exception as e:
+                          print(f"Viz Error {rid}: {e}")
+                
+                cmd.group(inter_type_group, dash_name)
+                    
+                # --- Interactive Dynamic Labels (Restored) ---
+                # Labels: Bold, Green, No Outline
+                
+                lbl_prot_name = f"lbl_prot_{rid}"
+                lbl_lig_name = f"lbl_lig_{rid}"
+                
+                # Label Protein Atom: "Resn Resi Atom" e.g. "ASN 123 OD1"
+                # Need p1 coordinate if it was a Ring
+                if inter["prot_atom"] == "Ring" and "prot_coord" in inter:
+                     p1_c = inter["prot_coord"]
+                     cmd.pseudoatom(lbl_prot_name, pos=list(p1_c))
+                     cmd.label(lbl_prot_name, '"%s %s Ring"' % (inter["prot_res"].split()[0], inter["prot_res"].split()[1]))
+                else:
+                     prot_atom_sel = f"({prot_res_sel} and name {prot_atom_names})"
+                     cmd.select(lbl_prot_name, prot_atom_sel)
+                     cmd.label(lbl_prot_name, '"%s %s %s" % (resn, resi, name)')
+
+                cmd.set("label_color", "green", lbl_prot_name)
+                # cmd.set("label_outline_color", "black", lbl_prot_name) # Removed borders per request
+                cmd.set("label_font_id", 2, lbl_prot_name) # 2 = Sans Bold
+                
+                # Label Ligand Atom: "Atom" e.g. "N1"
+                if inter["lig_atom"] == "Ring" and "lig_coord" in inter:
+                     p2_c = inter["lig_coord"]
+                     cmd.pseudoatom(lbl_lig_name, pos=list(p2_c))
+                     cmd.label(lbl_lig_name, '"Ring"')
+                else:
+                     # Re-derive selector if needed, or assume it's valid
+                     lig_atom_sel = f"({self.loaded_object} and chain {lig_chain} and resi {lig_resi} and name {lig_atom_names})"
+                     cmd.select(lbl_lig_name, lig_atom_sel) 
+                     cmd.label(lbl_lig_name, '"%s" % (name)') 
+
+                cmd.set("label_color", "green", lbl_lig_name)
+                # cmd.set("label_outline_color", "black", lbl_lig_name) # Removed borders per request
+                cmd.set("label_font_id", 2, lbl_lig_name) # 2 = Sans Bold
+                
+                cmd.group(inter_type_group, lbl_prot_name)
+                cmd.group(inter_type_group, lbl_lig_name)
+                
+                # Distance Label is handled by cmd.distance object itself (dash_name)
+                # So we don't need manual pseudoatom for it regarding 'p1'/'p2'
+                pass
+
+
+
+                    # Optional angle label - REMOVED per user request for cleaner look
+                    # if bool(self._settings.get("show_angle_labels", False)) ...
+
 
             # --- Ring plane discs for pi interactions ---
             try:
@@ -1500,8 +2480,14 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             return
         cmd.hide("everything", "all")
 
-        # Set a black background
-        cmd.bg_color("black")
+        # Set a nice dark grey background
+        cmd.bg_color("grey20")
+
+        # Better lighting
+        cmd.set("ray_trace_mode", 1)
+        cmd.set("specular", 0.4)
+        cmd.set("shininess", 50)
+        cmd.set("ambient", 0.3)
 
         # Show polymer (protein/nucleic acids) as clean white cartoon, excluding selected ligand residue
         prot_sel = f"{self.loaded_object} and polymer"
@@ -1510,28 +2496,26 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             lig_excl = f" and not (chain {c} and resi {i} and resn {r})"
             prot_sel += lig_excl
         cmd.show("cartoon", prot_sel)
-        cmd.color("white", prot_sel)
+        cmd.set("cartoon_color", "white", prot_sel)
 
-        # Show ligand in ball-and-stick, colored by element
+        # Show ligand in licorice/ball-and-stick, colored by element
         if self.ligand_info:
             c, i, r = self.ligand_info
             lig_sel = f"{self.loaded_object} and chain {c} and resi {i} and resn {r}"
             try:
                 cmd.show("sticks", lig_sel)
-                cmd.show("spheres", lig_sel)
-                cmd.set("stick_radius", 0.15, lig_sel)
-                cmd.set("sphere_scale", 0.25, lig_sel)
-                cmd.util.cba(20, lig_sel)  # Color by element (CPK colors)
+                cmd.set("stick_radius", 0.25, lig_sel)
+                cmd.util.cba(20, lig_sel)  # Color by element
                 if bool(self._settings.get("auto_zoom", True)) if hasattr(self, "_settings") else True:
-                    cmd.zoom(lig_sel, 8)
+                    cmd.zoom(lig_sel, 6)
             except Exception:
                 pass
 
         # General settings for a clean look
         cmd.set("antialias", 2)
-        cmd.set("dash_gap", 0.2)
-        cmd.set("dash_length", 0.4)
-        cmd.set("dash_radius", 0.08)
+        # Dash settings serve as backup if CGO fails
+        cmd.set("dash_gap", 0.0) 
+        cmd.set("dash_radius", 0.1)
         cmd.set("ray_trace_fog", 0)  # No fog
         cmd.set("depth_cue", 0)  # No depth cueing
         # Legend overlay refresh
@@ -1955,26 +2939,17 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             pass
 
     def _build_legend(self):
-        # If UI has a legend_layout, populate it; safe to no-op otherwise
-        legend_container = getattr(self, "legend_grid", None) or self.findChild(QtWidgets.QGridLayout, "legend_grid")
-        if not legend_container:
-            return
-        # Clear existing
-        while legend_container.count():
-            item = legend_container.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
-        # Populate
-        row = 0
-        for name, color in COLOR_MAP.items():
-            swatch = QtWidgets.QLabel()
-            swatch.setFixedSize(14, 14)
-            swatch.setStyleSheet(f"background:{color}; border:1px solid #333;")
-            label = QtWidgets.QLabel(name)
-            legend_container.addWidget(swatch, row, 0)
-            legend_container.addWidget(label, row, 1)
-            row += 1
+        # Legend removed per user request
+        # If UI element exists, clear it
+        try:
+            legend_container = getattr(self, "legend_grid", None) or self.findChild(QtWidgets.QGridLayout, "legend_grid")
+            if legend_container:
+                while legend_container.count():
+                    item = legend_container.takeAt(0)
+                    if item.widget():
+                        item.widget().deleteLater()
+        except:
+            pass
 
     def _init_filter(self):
         combo = getattr(self, "filter_combo", None)
@@ -2632,55 +3607,12 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to export CSV: {e}")
 
     def _update_legend(self, for_export=False, anchor="top_right"):
-        # Remove previous legend
+        # Explicit request to remove all legend objects: "legend_0" to "legend_9"
         try:
             cmd.delete("Interactions.Legend")
+            # Loop arbitrary range to be safe
+            for i in range(20):
+                 cmd.delete(f"legend_{i}")
         except Exception:
             pass
-        # Position based on object extent for export-safe placement
-        view = cmd.get_view()
-        # object center and scale
-        try:
-            minv, maxv = cmd.get_extent(self.loaded_object)
-            minv = np.array(minv)
-            maxv = np.array(maxv)
-            center = (minv + maxv) / 2.0
-            diag = float(np.linalg.norm(maxv - minv)) or 10.0
-        except Exception:
-            center = np.array([view[12], view[13], view[14]])
-            diag = 10.0
-
-        right = np.array(view[0:3])
-        up = np.array(view[3:6])
-        right = right / (np.linalg.norm(right) or 1.0)
-        up = up / (np.linalg.norm(up) or 1.0)
-        # offset as fraction of object size; increase for export
-        frac = 0.35 if for_export else 0.25
-        off_r = frac * diag
-        off_u = frac * diag
-        if anchor == "top_left":
-            off_r = -off_r
-        if anchor in ("bottom_left", "bottom_right"):
-            off_u = -off_u
-        base = np.array(center) + right * off_r + up * off_u
-        dy = -0.12 * diag  # line spacing scales with object size
-
-        idx = 0
-        for name, color in COLOR_MAP.items():
-            pos = base + up * (dy * idx)
-            ps_name = f"legend_{idx}"
-            try:
-                cmd.pseudoatom(ps_name, pos=[float(pos[0]), float(pos[1]), float(pos[2])])
-                cmd.show("spheres", ps_name)
-                cmd.set("sphere_scale", 0.3, ps_name)
-                cmd.color(self._type_color_name(name), ps_name)
-                cmd.label(ps_name, f'"{name}"')
-                cmd.set("label_color", "white", ps_name)
-                cmd.set("label_outline_color", "black", ps_name)
-                # offset label to the right
-                offset = (right * (0.15 * diag)).tolist()
-                cmd.set("label_position", [float(offset[0]), float(offset[1]), float(offset[2])], ps_name)
-                cmd.group("Interactions.Legend", ps_name)
-            except Exception:
-                pass
             idx += 1

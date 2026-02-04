@@ -217,7 +217,8 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         if hasattr(self, "reset_defaults_btn"):
             self.reset_defaults_btn.clicked.connect(self._on_reset_defaults)
         if hasattr(self, "hist_btn"):
-            self.hist_btn.clicked.connect(self._on_show_hist)
+            self.hist_btn.setVisible(False) # User request: move functionality to Trajectory only
+            # self.hist_btn.clicked.connect(self._on_show_hist)
         if hasattr(self, "edit_styles_btn"):
             self.edit_styles_btn.clicked.connect(self._on_edit_styles)
         if hasattr(self, "apply_styles_btn"):
@@ -1445,6 +1446,14 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                   
                   frames_analyzed += 1
                   for inter in current_inters:
+                       # Respect User Filters (Type Checkboxes)
+                       if hasattr(self, "_type_checkboxes"):
+                            itype = inter["type"]
+                            cb = self._type_checkboxes.get(itype)
+                            # If checkbox exists and is unchecked, skip
+                            if cb and not cb.isChecked():
+                                 continue
+                                 
                        # Key for uniqueness: Type + ProtRes + LigAtom
                        # Remove "distance" specific keys
                        k = (inter["type"], inter["prot_res"], inter["lig_atom"])

@@ -218,13 +218,15 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             self.reset_defaults_btn.clicked.connect(self._on_reset_defaults)
         if hasattr(self, "hist_btn"):
             self.hist_btn.setVisible(False) # User request: move functionality to Trajectory only
-            # self.hist_btn.clicked.connect(self._on_show_hist)
-        if hasattr(self, "edit_styles_btn"):
-            self.edit_styles_btn.clicked.connect(self._on_edit_styles)
-        if hasattr(self, "apply_styles_btn"):
-            self.apply_styles_btn.clicked.connect(self._on_apply_styles_now)
-        if hasattr(self, "remove_all_btn"):
-            self.remove_all_btn.clicked.connect(self._on_remove_all_visuals)
+            
+        # User Request: Remove "Max Distance" labels and "Legend/Types" groups from main UI
+        # (Since they were moved to Trajectory Analysis panel)
+        if hasattr(self, "maxDistLabel"):
+             self.maxDistLabel.setVisible(False)
+        if hasattr(self, "types_group"):
+             self.types_group.setVisible(False)
+        if hasattr(self, "legend_group"):
+             self.legend_group.setVisible(False)
 
         # Add 2D Map button programmatically if not in UI
         if not hasattr(self, "show_2d_btn"):
@@ -797,6 +799,31 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
         except Exception as e:
              print(f"Pre-calc Check Error: {e}")
              
+        except Exception as e:
+             print(f"Pre-calc Check Error: {e}")
+             
+        # CRITICAL: Refresh Bio.PDB structure from PyMOL state!
+        # If we added Hydrogens (h_add), the internal self.structure is STALE.
+        # We must reload it to ensure Feature Extraction sees the hydrogens and correct coords.
+        try:
+            print("ProtLigInteract: Synchronizing structure from PyMOL...")
+            pdb_str = cmd.get_pdbstr(self.loaded_object)
+            if pdb_str and len(pdb_str) > 0:
+                from Bio.PDB import PDBParser
+                import io
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    parser = PDBParser(QUIET=True)
+                    # PDBParser expects a file-like object
+                    self.structure = parser.get_structure("current", io.StringIO(pdb_str))
+                    self._cached_features = None # Invalidated
+                print("ProtLigInteract: Structure synced successfully.")
+            else:
+                print("ProtLigInteract: Warning - Empty PDB string from PyMOL.")
+        except Exception as e:
+            print(f"ProtLigInteract: Structure Sync Failed: {e}")
+             
         self.interactions = self._calculate_all_interactions()
         self._populate_table()
         self._beautify_scene()
@@ -838,15 +865,51 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
 
     def _setup_trajectory_ui(self):
         # Programmatically add Trajectory Analysis UI to the layout
-        # Assumes a vertical layout exists. We can add a GroupBox at the bottom.
+        # As requested: "Filter Max Distance" and "Legend" (Interaction Types) moved here.
         try:
-             # Find main layout. usually self.layout() or self.centralWidget().layout()
              layout = self.layout()
              
-             gb = QtWidgets.QGroupBox("Trajectory Analysis")
+             gb = QtWidgets.QGroupBox("Trajectory & Interaction Analysis")
              vbox = QtWidgets.QVBoxLayout()
              
-             # File Loaders
+             # --- 1. Filters & Legend (Moved from Main) ---
+             filter_gb = QtWidgets.QGroupBox("Filters (Legend)")
+             filter_lay = QtWidgets.QVBoxLayout()
+             
+             # Reparent Max Distance Controls if found
+             if hasattr(self, "max_distance_spin"):
+                  h = QtWidgets.QHBoxLayout()
+                  h.addWidget(QtWidgets.QLabel("Max Dist (Å):"))
+                  # Move widget from old parent
+                  self.max_distance_spin.setParent(None) 
+                  self.max_distance_spin.setVisible(True) # Ensure visible
+                  h.addWidget(self.max_distance_spin)
+                  
+                  if hasattr(self, "max_distance_slider"):
+                       self.max_distance_slider.setParent(None)
+                       self.max_distance_slider.setVisible(True)
+                       h.addWidget(self.max_distance_slider)
+                  filter_lay.addLayout(h)
+             
+             # Placeholder for Type Checkboxes (Legend)
+             # We create a layout that _init_type_toggles will target
+             self.traj_types_layout = QtWidgets.QVBoxLayout()
+             # Logic to re-populate if already initialized?
+             # _init_type_toggles() will be called/modified to use this.
+             
+             # Add a scroll area for types if many
+             scroll = QtWidgets.QScrollArea()
+             miniw = QtWidgets.QWidget()
+             miniw.setLayout(self.traj_types_layout)
+             scroll.setWidget(miniw)
+             scroll.setWidgetResizable(True)
+             scroll.setFixedHeight(150) # Limit height
+             filter_lay.addWidget(scroll)
+             
+             filter_gb.setLayout(filter_lay)
+             vbox.addWidget(filter_gb)
+
+             # --- 2. File Loaders ---
              hbox_load = QtWidgets.QHBoxLayout()
              self.btn_load_top = QtWidgets.QPushButton("Load Topology")
              self.btn_load_top.setToolTip("Load PDB, PSF, GRO, etc.")
@@ -857,10 +920,9 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
              self.btn_load_traj.setToolTip("Load DCD, XTC, TRR, etc. into current object")
              self.btn_load_traj.clicked.connect(self._on_load_trajectory)
              hbox_load.addWidget(self.btn_load_traj)
-             
              vbox.addLayout(hbox_load)
              
-             # Analysis Controls
+             # --- 3. Analysis Controls ---
              hbox = QtWidgets.QHBoxLayout()
              hbox.addWidget(QtWidgets.QLabel("Step (Frames):"))
              self.traj_step = QtWidgets.QSpinBox()
@@ -875,15 +937,15 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
              vbox.addLayout(hbox)
              gb.setLayout(vbox)
              
-             gb.setLayout(vbox)
-             
-             # Add to main layout. Insert before the last item (status label?) if possible, or just add.
-             # count() - 1 usually works.
+             # Add to main layout
              if hasattr(self, "verticalLayout"):
                   self.verticalLayout.addWidget(gb)
              else:
                   self.layout().addWidget(gb)
-             
+                  
+             # Trigger re-init of toggles to populate our new layout
+             self._init_type_toggles() 
+                  
         except Exception as e:
              print(f"Traj UI Setup Error: {e}")
 
@@ -1083,6 +1145,13 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 mol = Chem.MolFromPDBBlock(pdb_block, removeHs=False)
                 
                 if mol:
+                     # New: SMARTS-based Group Detection (Robustness)
+                     # Tag Anions/Cations directly from matched groups.
+                     # This runs before charge assignment, but modifies 'features' dict atoms.
+                     # (Note: _compute_ligand_charges might overwrite formal charge, 
+                     # but _annotate sets 'is_anion'/'is_cation' flags which persist).
+                     self._annotate_ligand_groups(mol, features)
+                     
                      charges = self._compute_ligand_charges(mol)
                      # Annotate atoms
                      for atom_info in features["ligand_atoms"]:
@@ -1445,19 +1514,29 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                   self._traj_mode = False
                   
                   frames_analyzed += 1
+                   
+                  # Get Max Distance Cutoff
+                  max_dist = 100.0
+                  if hasattr(self, "max_distance_spin"):
+                       try: max_dist = float(self.max_distance_spin.value())
+                       except: pass
+                       
                   for inter in current_inters:
-                       # Respect User Filters (Type Checkboxes)
-                       if hasattr(self, "_type_checkboxes"):
-                            itype = inter["type"]
-                            cb = self._type_checkboxes.get(itype)
-                            # If checkbox exists and is unchecked, skip
-                            if cb and not cb.isChecked():
-                                 continue
-                                 
-                       # Key for uniqueness: Type + ProtRes + LigAtom
-                       # Remove "distance" specific keys
-                       k = (inter["type"], inter["prot_res"], inter["lig_atom"])
-                       interaction_counts[k] += 1
+                      # Distance Filter
+                      if inter["distance"] > max_dist:
+                           continue
+                      # Respect User Filters (Type Checkboxes)
+                      if hasattr(self, "_type_checkboxes"):
+                           itype = inter["type"]
+                           cb = self._type_checkboxes.get(itype)
+                           # If checkbox exists and is unchecked, skip
+                           if cb and not cb.isChecked():
+                                continue
+                      
+                      # Key for uniqueness: Type + ProtRes + LigAtom
+                      # Remove "distance" specific keys
+                      k = (inter["type"], inter["prot_res"], inter["lig_atom"])
+                      interaction_counts[k] += 1
                        
              pd.setValue(states)
              
@@ -1595,47 +1674,67 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             
             target_mol = mol
             
-            # If no hydrogens, attempt PH-dependent protonation to get Formal Charges
-            if not has_h:
+            # Robust Protonation Logic (User Request)
+            # Even if Hydrogens are present (from PyMOL h_add), they might be geometrically neutral (NH2 vs NH3+).
+            # We trust Dimorphite-DL to give the correct Formal Charge state for the pH.
+            # So we ALWAYS try to run Dimorphite if available to corrected Charges.
+            
+            # Logic:
+            # 1. If no Hs, we use Dimorphite to Add Hs and Charges.
+            # 2. If Hs exist, we use Dimorphite to Correct Charges (but keep coords/Hs).
+            
+            can_protonate = False
+            try:
+                 import dimorphite_dl
+                 can_protonate = True
+            except ImportError:
+                 pass
+
+            target_ph = getattr(self, "_target_ph", None)
+            if target_ph is None and can_protonate:
+                 target_ph = 7.4 # Default
+            
+            if can_protonate and target_ph is not None:
                 try:
-                    import dimorphite_dl
-                    from rdkit.Chem import Descriptors
-                    
                     smiles = Chem.MolToSmiles(mol)
-                    # Use specified pH or default 7.4
-                    target_ph = getattr(self, "_target_ph", None)
-                    if target_ph is None:
-                         target_ph = 7.4
-                    
+                    # Use widish window to catch species
                     protonated_smiles_list = dimorphite_dl.protonate(smiles, min_ph=target_ph-0.2, max_ph=target_ph+0.2)
                     
                     if protonated_smiles_list:
-                         # Take the first dominant state
+                         # Take dominant
                          p_smi = protonated_smiles_list[0]
                          p_mol = Chem.MolFromSmiles(p_smi)
                          
                          if p_mol:
-                             # Transfer Formal Charges to original Mol based on graph match
-                             # Matches heavy atoms
-                             matches = mol.GetSubstructMatches(p_mol, useChirality=True)
-                             if not matches:
-                                  matches = mol.GetSubstructMatches(p_mol, useChirality=False) # relaxed
-                             
-                             if matches:
-                                  # match is a tuple of indices in 'mol' corresponding to 'p_mol' atoms
-                                  # But p_mol atoms are ordered by SMILES.
-                                  # We need to transfer charge FROM p_mol TO mol.
-                                  match = matches[0] # Take first match
-                                  for i, mol_idx in enumerate(match):
-                                       p_atom = p_mol.GetAtomWithIdx(i)
-                                       mol_atom = mol.GetAtomWithIdx(mol_idx)
-                                       mol_atom.SetFormalCharge(p_atom.GetFormalCharge())
-                                       
-                             target_mol = mol # Update in place
-                except ImportError:
-                    pass
+                              # Transfer Formal Charges from Dimorphite P_Mol to PDB Mol
+                              # Matches based on graph (ignoring H count diffs hopefully)
+                              matches = mol.GetSubstructMatches(p_mol, useChirality=False)
+                              if matches:
+                                   match = matches[0]
+                                   for i, query_idx in enumerate(match):
+                                        # i is index in 'mol', query_idx is index in 'p_mol'
+                                        # Wait, GetSubstructMatches returns tuple of atoms in 'mol' that match 'p_mol' atoms 0..N
+                                        atom_in_pdb = mol.GetAtomWithIdx(query_idx) # No, match[j] is index in mol corresponding to p_mol atom j
+                                        
+                                        atom_in_p_mol = p_mol.GetAtomWithIdx(i)
+                                        atom_in_pdb_mol = mol.GetAtomWithIdx(match[i])
+                                        
+                                        # Apply Charge
+                                        correct_charge = atom_in_p_mol.GetFormalCharge()
+                                        if atom_in_pdb_mol.GetFormalCharge() != correct_charge:
+                                             # print(f"Correcting Charge for {atom_in_pdb_mol.GetSymbol()}: {atom_in_pdb_mol.GetFormalCharge()} -> {correct_charge}")
+                                             atom_in_pdb_mol.SetFormalCharge(correct_charge)
+                                             # Note: We do NOT adding/removing H atoms here to avoid coordinate issues.
+                                             # But changing Formal Charge is enough for 'features' calculation.
                 except Exception as e:
-                    print(f"Protonation Error: {e}")
+                    print(f"Protonation Correction Warning: {e}")
+
+            # Original fallback if no hydrogens and no dimorphite (unlikely path now)
+            if not has_h and not can_protonate:
+                 pass # Gasteiger will run below
+
+            # Fallback complete
+            pass
 
             # Compute Gasteiger Charges
             # (Requires Hydrogens for accuracy? If explicit H missing, results might be off unless ImplicitValence used)
@@ -1785,7 +1884,69 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                 rec.update(extra)
             interactions.append(rec)
 
-        # --- Hydrogen bonds with angle checks (using neighbor grids) ---
+        # -------------------------------------------------------------------------
+        # 1. Salt Bridges (Prioritized)
+        # -------------------------------------------------------------------------
+        # We calculate this first to prioritize it over H-Bonds and Hydrophobic contacts for the same residues.
+        sb_cut = GEOMETRY_CRITERIA["salt_bridge_dist"]
+        sb_residues = set() # Store (chain, resi) tuples involved in Salt Bridges
+        
+        # Ligand Negative atoms (Strict Charge-Based)
+        # Element + Charge check (Formal <= -1 or Partial <= -0.3)
+        lig_neg_atoms = []
+        for a in features["ligand_atoms"]:
+             if a["element"] in ("O", "S", "P", "F", "Cl", "Br", "I"):
+                  q_f = a.get("charge_formal", 0)
+                  q_p = a.get("charge_partial", 0.0)
+                  if q_f <= -1 or q_p <= -0.3:
+                       lig_neg_atoms.append(a)
+        
+        # Ligand Positive atoms (Cation-Pi)
+        # Element N + Charge check (Formal >= 1 or Partial >= 0.3)
+        lig_pos_atoms = []
+        for a in features["ligand_atoms"]:
+             if a["element"] == "N" and a["name"] != "N":
+                  q_f = a.get("charge_formal", 0)
+                  q_p = a.get("charge_partial", 0.0)
+                  if q_f >= 1 or q_p >= 0.3:
+                       lig_pos_atoms.append(a)
+        
+        # Salt Bridge Candidates (Protein Negative -> Ligand Positive, Protein Positive -> Ligand Negative)
+        sb_candidates = []
+        
+        # Ligand Negative candidates
+        grid_lig_neg = self._NeighborGrid(lig_neg_atoms, cell_size=sb_cut)
+        for p_pos in features["protein_positive"]:
+            for l_neg in grid_lig_neg.query(p_pos["coord"], sb_cut):
+                d = distance(p_pos["coord"], l_neg["coord"])
+                if d <= sb_cut:
+                    sb_candidates.append(("Salt Bridge", p_pos, l_neg, d))
+        
+        # Ligand Positive candidates
+        grid_lig_pos = self._NeighborGrid(lig_pos_atoms, cell_size=sb_cut)
+        for p_neg in features["protein_negative"]:
+            for l_pos in grid_lig_pos.query(p_neg["coord"], sb_cut):
+                d = distance(p_neg["coord"], l_pos["coord"])
+                if d <= sb_cut:
+                     sb_candidates.append(("Salt Bridge", p_neg, l_pos, d))
+
+        # Filter: Group by (Protein Chain, Resi) -> Keep min distance one
+        sb_by_res = {}
+        for item in sb_candidates:
+            itype, prot, lig, d = item
+            key = (prot["chain"], prot["resi"])
+            if key not in sb_by_res or d < sb_by_res[key][3]:
+                sb_by_res[key] = item
+        
+        for item in sb_by_res.values():
+            add_interaction(*item)
+            # Mark residue as having a Salt Bridge
+            prot = item[1]
+            sb_residues.add((prot["chain"], prot["resi"]))
+
+        # -------------------------------------------------------------------------
+        # 2. Hydrogen bonds (with Suppression)
+        # -------------------------------------------------------------------------
         hb_cut = GEOMETRY_CRITERIA["h_bond_dist"]
         grid_lig_acc = self._NeighborGrid(features["ligand_h_donors_acceptors"], cell_size=hb_cut)
         grid_prot_acc = self._NeighborGrid(features["protein_h_acceptors"], cell_size=hb_cut)
@@ -1836,21 +1997,17 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                     # Vector H->D: p_d - h. Vector H->A: l_a - h.
                     # Angle is typically defined at H? No, angle D-H...A is usually ~180.
                     # Let's use `angle_between_vectors` which returns angle between 0-180.
-                    v_HD = p_d["coord"] - h["coord"]  # Vector H to D
                     v_HA = l_a["coord"] - h["coord"]  # Vector H to A
-                    # Wait, angle_between_vectors(v1, v2). If linear D-H...A, v_HD and v_HA are opposite?
-                    # D -- H ... A
-                    # H-D vector points left. H-A vector points right. Angle 180.
-                    
+                    # Angle between vectors H->D and H->A. (Ideally 180).
+                    # 'angle_between_vectors' returns 0-180.
+                    v_HD = p_d["coord"] - h["coord"]
                     angle = angle_between_vectors(v_HD, v_HA)
                     if angle < hb_angle_min: continue
                     
-                    # Store Interaction (use Heavy atom distance for consistent visualization/labeling usually, but H is scientifically correct)
-                    # Standard Pymol distance is often Heavy-Heavy. But let's use Heavy-Heavy for the "dashed line" anchor?
-                    # Or should we anchor to H? User said "hydrogen in the middle".
-                    # Let's interact D...A but note H involvement.
+                    # Store Interaction: User wants H...A line involving the Hydrogen
                     d_DA = distance(p_d["coord"], l_a["coord"])
-                    add_interaction("Hydrogen Bond", p_d, l_a, d_DA, f"H-Bond (H...A {d_HA:.1f}Å, {angle:.0f}°)")
+                    # We pass 'h' as the protein atom instead of 'p_d'.
+                    add_interaction("Hydrogen Bond", h, l_a, d_HA, f"H-Bond (H...A {d_HA:.1f}Å, D...A {d_DA:.1f}Å, {angle:.0f}°)")
 
         # Ligand Donor (Heavy) -> Protein Acceptor
         for l_d in features["ligand_h_donors_acceptors"]:
@@ -1874,7 +2031,8 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
                     if angle < hb_angle_min: continue
                     
                     d_DA = distance(l_d["coord"], p_a["coord"])
-                    add_interaction("Hydrogen Bond", p_a, l_d, d_DA, f"H-Bond (H...A {d_HA:.1f}Å, {angle:.0f}°)")
+                    # Pass 'h' as ligand atom
+                    add_interaction("Hydrogen Bond", p_a, h, d_HA, f"H-Bond (H...A {d_HA:.1f}Å, D...A {d_DA:.1f}Å, {angle:.0f}°)")
 
         # --- Salt bridges (One per residue pair) ---
         # Collect all candidates first, then filter.
@@ -3003,7 +3161,10 @@ class ProtLigInteractDialog(QtWidgets.QDialog):
             self.max_distance_spin.valueChanged.connect(spin_to_slider)
 
     def _init_type_toggles(self):
-        layout = getattr(self, "types_layout", None) or self.findChild(QtWidgets.QVBoxLayout, "types_layout")
+        # Prefer Trajectory UI layout if setup
+        layout = getattr(self, "traj_types_layout", None)
+        if not layout:
+             layout = getattr(self, "types_layout", None) or self.findChild(QtWidgets.QVBoxLayout, "types_layout")
         if not layout:
             return
         # Clear any existing
